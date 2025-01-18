@@ -24,8 +24,11 @@ import android.webkit.WebView
 import androidx.activity.OnBackPressedCallback
 import androidx.fragment.app.FragmentActivity
 import anki.collection.OpChanges
-import com.ichi2.anki.CollectionManager
+import anki.collection.Progress
+import com.ichi2.anki.CollectionManager.TR
+import com.ichi2.anki.CollectionManager.withCol
 import com.ichi2.anki.CrashReportService
+import com.ichi2.anki.ProgressContext
 import com.ichi2.anki.R
 import com.ichi2.anki.dialogs.DiscardChangesDialog
 import com.ichi2.anki.launchCatchingTask
@@ -33,6 +36,7 @@ import com.ichi2.anki.utils.openUrl
 import com.ichi2.anki.withProgress
 import com.ichi2.annotations.NeedsTest
 import com.ichi2.libanki.DeckId
+import com.ichi2.libanki.sched.computeFsrsParamsRaw
 import com.ichi2.libanki.undoableOp
 import com.ichi2.libanki.updateDeckConfigsRaw
 import kotlinx.coroutines.Dispatchers
@@ -235,29 +239,71 @@ suspend fun FragmentActivity.updateDeckConfigsRaw(input: ByteArray): ByteArray {
         withContext(Dispatchers.Main) {
             withProgress(
                 extractProgress = {
-                    text =
-                        if (progress.hasComputeParams()) {
-                            val tr = CollectionManager.TR
-                            val value = progress.computeParams
-                            val label =
-                                tr.deckConfigOptimizingPreset(
-                                    currentCount = value.currentPreset,
-                                    totalCount = value.totalPresets,
-                                )
-                            val pct = if (value.total > 0) (value.current / value.total * 100) else 0
-                            val reviewsLabel = tr.deckConfigPercentOfReviews(pct = pct.toString(), reviews = value.reviews)
-                            label + "\n" + reviewsLabel
-                        } else {
-                            getString(R.string.dialog_processing)
-                        }
+                    text = this.toOptimizingPresetString() ?: getString(R.string.dialog_processing)
                 },
             ) {
                 withContext(Dispatchers.IO) {
-                    CollectionManager.withCol { updateDeckConfigsRaw(input) }
+                    withCol { updateDeckConfigsRaw(input) }
                 }
             }
         }
     undoableOp { OpChanges.parseFrom(output) }
     withContext(Dispatchers.Main) { finish() }
     return output
+}
+
+suspend fun FragmentActivity.computeFsrsParams(input: ByteArray): ByteArray =
+    withContext(Dispatchers.Main) {
+        withProgress(extractProgress = {
+            text = this.toUpdatingCardsString() ?: getString(R.string.dialog_processing)
+        }) {
+            withContext(Dispatchers.IO) {
+                withCol { computeFsrsParamsRaw(input) }
+            }
+        }
+    }
+
+/**
+ * ```
+ * Optimizing preset 1/20
+ * 5.2% of 1000 reviews
+ * ```
+ *
+ * @return the above string, or `null` if [ProgressContext] has no
+ * [compute parameters][Progress.hasComputeParams]
+ */
+private fun ProgressContext.toOptimizingPresetString(): String? {
+    if (!progress.hasComputeParams()) return null
+
+    val value = progress.computeParams
+    val label =
+        TR.deckConfigOptimizingPreset(
+            currentCount = value.currentPreset,
+            totalCount = value.totalPresets,
+        )
+    val pct = if (value.total > 0) (value.current.toDouble() / value.total.toDouble() * 100.0) else 0.0
+    val reviewsLabel =
+        TR.deckConfigPercentOfReviews(
+            pct = "%.1f".format(pct),
+            reviews = value.reviews,
+        )
+    return label + "\n" + reviewsLabel
+}
+
+/**
+ * ```
+ * Updating Cards: 45/23687
+ * ```
+ *
+ * @return the above string, or `null` if [ProgressContext] has no
+ * [compute parameters][Progress.hasComputeParams]
+ */
+private fun ProgressContext.toUpdatingCardsString(): String? {
+    if (!progress.hasComputeParams()) return null
+
+    val params = progress.computeParams
+    return TR.deckConfigUpdatingCards(
+        currentCardsCount = params.current,
+        totalCardsCount = params.total,
+    )
 }

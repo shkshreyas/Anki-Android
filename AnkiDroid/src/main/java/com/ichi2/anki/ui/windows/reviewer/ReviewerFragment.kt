@@ -92,6 +92,9 @@ import com.ichi2.anki.preferences.reviewer.ViewerAction.USER_ACTION_8
 import com.ichi2.anki.preferences.reviewer.ViewerAction.USER_ACTION_9
 import com.ichi2.anki.previewer.CardViewerActivity
 import com.ichi2.anki.previewer.CardViewerFragment
+import com.ichi2.anki.settings.Prefs
+import com.ichi2.anki.settings.enums.FrameStyle
+import com.ichi2.anki.settings.enums.HideSystemBars
 import com.ichi2.anki.snackbar.BaseSnackbarBuilderProvider
 import com.ichi2.anki.snackbar.SnackbarBuilder
 import com.ichi2.anki.snackbar.showSnackbar
@@ -235,7 +238,7 @@ class ReviewerFragment :
                     }
                 }
             }
-        val autoFocusTypeAnswer = sharedPrefs().getBoolean(getString(R.string.type_in_answer_focus_key), true)
+        val autoFocusTypeAnswer = Prefs.autoFocusTypeAnswer
         viewModel.typeAnswerFlow.collectIn(lifecycleScope) { typeInAnswer ->
             typeAnswerEditText.text = null
             if (typeInAnswer == null) {
@@ -331,7 +334,7 @@ class ReviewerFragment :
             easyButton.isVisible = false
         }
 
-        val buttonsHeight = prefs.getInt("answerButtonSize", 100)
+        val buttonsHeight = Prefs.answerButtonsSize
         if (buttonsHeight != 100) {
             buttonsAreaLayout.post {
                 buttonsAreaLayout.updateLayoutParams {
@@ -450,9 +453,8 @@ class ReviewerFragment :
     }
 
     private fun setupImmersiveMode(view: View) {
-        val hideSystemBarsSetting = HideSystemBars.from(requireContext())
         val barsToHide =
-            when (hideSystemBarsSetting) {
+            when (Prefs.hideSystemBars) {
                 HideSystemBars.NONE -> return
                 HideSystemBars.STATUS_BAR -> WindowInsetsCompat.Type.statusBars()
                 HideSystemBars.NAVIGATION_BAR -> WindowInsetsCompat.Type.navigationBars()
@@ -465,7 +467,7 @@ class ReviewerFragment :
             systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         }
 
-        val ignoreDisplayCutout = sharedPrefs().getBoolean(getString(R.string.ignore_display_cutout_key), false)
+        val ignoreDisplayCutout = Prefs.ignoreDisplayCutout
         ViewCompat.setOnApplyWindowInsetsListener(view) { v, insets ->
             val defaultTypes = WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.ime()
             val typeMask =
@@ -486,9 +488,7 @@ class ReviewerFragment :
     }
 
     private fun setupFrame(view: View) {
-        val frameStyleKey = getString(R.string.reviewer_frame_style_key)
-        val boxValue = getString(R.string.reviewer_frame_style_box_value)
-        if (sharedPrefs().getString(frameStyleKey, null) == boxValue) {
+        if (Prefs.frameStyle == FrameStyle.BOX) {
             view.findViewById<MaterialCardView>(R.id.webview_container).apply {
                 setMargins(0)
                 cardElevation = 0F
