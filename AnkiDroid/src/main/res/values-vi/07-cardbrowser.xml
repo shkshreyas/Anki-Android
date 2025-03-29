@@ -80,7 +80,7 @@
         <item>Bằng thời gian tạo ra</item>
         <item>Theo thời gian sửa đổi ghi chú</item>
         <item>Theo thời gian sửa đổi thẻ</item>
-        <item>Bởi thời gian hết hạn </item>
+        <item>Bởi thời gian hết hạn</item>
         <item>Bởi khoảng thời gian</item>
         <item>Bởi dễ dàng</item>
         <item>Bởi ôn tập</item>
@@ -105,4 +105,12 @@
     <!--Keyboard shortcuts dialog-->
     <string name="edit_tags_dialog" comment="Description of the shortcut that opens the edit tags dialog">Edit tags dialog</string>
     <string name="show_order_dialog" comment="Description of the shortcut that shows the order dialog">Show order dialog</string>
+    <!-- Manage columns dialog -->
+    <string name="browse_manage_columns_main_heading">Columns</string>
+    <string name="browse_manage_columns">Manage columns</string>
+    <string name="user_active_columns">Active</string>
+    <string name="user_potential_columns">Available</string>
+    <string name="include_column">Include column</string>
+    <string name="exclude_column">Exclude column</string>
+    <string name="browser_find_replace_loading_fields">Retrieving fields names&#8230;</string>
 </resources>

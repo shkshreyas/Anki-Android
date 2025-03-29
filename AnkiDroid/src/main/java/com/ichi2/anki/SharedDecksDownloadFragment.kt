@@ -24,7 +24,6 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.database.Cursor
-import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -34,12 +33,15 @@ import android.widget.Button
 import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.activity.OnBackPressedCallback
+import androidx.annotation.VisibleForTesting
 import androidx.appcompat.app.AlertDialog
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
+import androidx.core.net.toUri
 import androidx.fragment.app.Fragment
 import com.ichi2.anki.SharedDecksActivity.Companion.DOWNLOAD_FILE
 import com.ichi2.anki.snackbar.showSnackbar
+import com.ichi2.anki.utils.openUrl
 import com.ichi2.compat.CompatHelper.Companion.getSerializableCompat
 import com.ichi2.compat.CompatHelper.Companion.registerReceiverCompat
 import com.ichi2.utils.ImportUtils
@@ -70,6 +72,7 @@ class SharedDecksDownloadFragment : Fragment(R.layout.fragment_shared_decks_down
     private lateinit var downloadPercentageText: TextView
     private lateinit var downloadProgressBar: ProgressBar
     private lateinit var checkNetworkInfoText: TextView
+    private lateinit var openInBrowserButton: Button
 
     /**
      * Android's DownloadManager - Used here to manage the functionality of downloading decks, one
@@ -106,6 +109,37 @@ class SharedDecksDownloadFragment : Fragment(R.layout.fragment_shared_decks_down
          * so our FileProvider can actually serve the file!
          */
         const val SHARED_DECKS_DOWNLOAD_FOLDER = "shared_decks"
+
+        private val deckIdRegex = "download-deck/(\\d+)".toRegex()
+
+        /**
+         * Given the URI of a deck's download URL such as
+         * https://ankiweb.net/svc/shared/download-deck/1104981491?t=eyJvcCI6InNkZCIsImlhdCI6MTc0MTUyNjQ0OSwianYiOjF9.hr4a_G-LAqMVBAp5_95l60_2lEtYxodGl4DrJ6dT2WI
+         * returns the deck's id, in this case "1104981491" if it can be found.
+         */
+        @VisibleForTesting
+        fun getDeckIdFromDownloadURL(downloadUrl: String) =
+            deckIdRegex
+                .find(downloadUrl)
+                ?.groups
+                ?.get(1)
+                ?.value
+
+        /**
+         * Given the URI of a deck's download URL such as
+         * https://ankiweb.net/svc/shared/download-deck/1104981491?t=eyJvcCI6InNkZCIsImlhdCI6MTc0MTUyNjQ0OSwianYiOjF9.hr4a_G-LAqMVBAp5_95l60_2lEtYxodGl4DrJ6dT2WI
+         * returns the deck's page URL such as https://ankiweb.net/shared/info/1104981491
+         * If the deck id can't be found, returns the ankiweb's shared deck's main page.
+         */
+        @VisibleForTesting
+        fun Context.getDeckPageUri(deckDownloadURL: String): String {
+            val deckId = getDeckIdFromDownloadURL(deckDownloadURL)
+            return if (deckId != null) {
+                getString(R.string.shared_deck_info) + deckId
+            } else {
+                getString(R.string.shared_decks_url)
+            }
+        }
     }
 
     override fun onViewCreated(
@@ -120,6 +154,7 @@ class SharedDecksDownloadFragment : Fragment(R.layout.fragment_shared_decks_down
         importDeckButton = view.findViewById(R.id.import_shared_deck_button)
         tryAgainButton = view.findViewById(R.id.try_again_deck_download)
         checkNetworkInfoText = view.findViewById(R.id.check_network_info_text)
+        openInBrowserButton = view.findViewById(R.id.download_shared_deck_from_browser)
 
         val fileToBeDownloaded = arguments?.getSerializableCompat<DownloadFile>(DOWNLOAD_FILE)!!
         downloadManager = (activity as SharedDecksActivity).downloadManager
@@ -136,14 +171,21 @@ class SharedDecksDownloadFragment : Fragment(R.layout.fragment_shared_decks_down
             openDownloadedDeck(context)
         }
 
+        openInBrowserButton.setOnClickListener {
+            Timber.i("'Open in Browser' clicked")
+            downloadManager.remove(downloadId)
+            openUrl(requireContext().getDeckPageUri(fileToBeDownloaded.url).toUri())
+            parentFragmentManager.popBackStack()
+        }
+
         tryAgainButton.setOnClickListener {
             Timber.i("Try again button clicked, retry downloading of deck")
             downloadManager.remove(downloadId)
             downloadFile(fileToBeDownloaded)
             cancelButton.visibility = View.VISIBLE
             tryAgainButton.visibility = View.GONE
+            openInBrowserButton.visibility = View.GONE
         }
-        requireActivity().onBackPressedDispatcher.addCallback(onBackPressedCallback)
     }
 
     /**
@@ -191,7 +233,7 @@ class SharedDecksDownloadFragment : Fragment(R.layout.fragment_shared_decks_down
         fileToBeDownloaded: DownloadFile,
         currentFileName: String,
     ): DownloadManager.Request {
-        val request: DownloadManager.Request = DownloadManager.Request(Uri.parse(fileToBeDownloaded.url))
+        val request: DownloadManager.Request = DownloadManager.Request(fileToBeDownloaded.url.toUri())
         request.setMimeType(fileToBeDownloaded.mimeType)
 
         val cookies = CookieManager.getInstance().getCookie(fileToBeDownloaded.url)
@@ -472,19 +514,22 @@ class SharedDecksDownloadFragment : Fragment(R.layout.fragment_shared_decks_down
      * If there are any pending downloads, continue with them.
      * Else, set mIsPreviousDownloadOngoing as false and unregister mOnComplete broadcast receiver.
      */
-    @Suppress("deprecation") // onBackPressed
-    private fun checkDownloadStatusAndUnregisterReceiver(isSuccessful: Boolean, isInvalidDeckFile: Boolean = false) {
+    private fun checkDownloadStatusAndUnregisterReceiver(
+        isSuccessful: Boolean,
+        isInvalidDeckFile: Boolean = false,
+    ) {
         if (isVisible && !isSuccessful) {
             if (isInvalidDeckFile) {
                 Timber.i("File is not a valid deck, hence return from the download screen")
                 context?.let { showThemedToast(it, R.string.import_log_no_apkg, false) }
                 // Go back if file is not a deck and cannot be imported
-                activity?.onBackPressed()
+                activity?.onBackPressedDispatcher?.onBackPressed()
             } else {
                 Timber.i("Download failed, update UI and provide option to retry")
                 context?.let { showThemedToast(it, R.string.something_wrong, false) }
                 // Update UI if download could not be successful
                 tryAgainButton.visibility = View.VISIBLE
+                openInBrowserButton.visibility = View.VISIBLE
                 cancelButton.visibility = View.GONE
                 downloadPercentageText.text = getString(R.string.download_failed)
                 downloadProgressBar.progress = DOWNLOAD_STARTED_PROGRESS_PERCENTAGE.toInt()

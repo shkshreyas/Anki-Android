@@ -17,7 +17,6 @@ package com.ichi2.anki.pages
 
 import android.content.Context
 import android.content.Intent
-import android.net.Uri
 import android.os.Bundle
 import android.view.View
 import android.webkit.JavascriptInterface
@@ -25,13 +24,14 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.annotation.CallSuper
 import androidx.annotation.LayoutRes
+import androidx.core.net.toUri
 import androidx.core.os.bundleOf
 import androidx.fragment.app.Fragment
 import com.google.android.material.appbar.MaterialToolbar
+import com.google.android.material.progressindicator.CircularProgressIndicator
 import com.ichi2.anki.R
 import com.ichi2.anki.SingleFragmentActivity
 import com.ichi2.themes.Themes
-import com.ichi2.themes.setTransparentStatusBar
 import timber.log.Timber
 import kotlin.reflect.KClass
 
@@ -45,6 +45,15 @@ open class PageFragment(
     PostRequestHandler {
     lateinit var webView: WebView
     private val server = AnkiServer(this).also { it.start() }
+
+    /**
+     * A loading indicator for the page. May be shown before the WebView is loaded to
+     * stop flickering
+     *
+     * @exception IllegalStateException if accessed before [onViewCreated]
+     */
+    val pageLoadingIndicator: CircularProgressIndicator
+        get() = requireView().findViewById(R.id.page_loading)
 
     /**
      * Override this to set a custom [WebViewClient] to the page.
@@ -108,13 +117,12 @@ open class PageFragment(
         setupBridgeCommand(pageWebViewClient)
         onWebViewCreated(webView)
 
-        requireActivity().setTransparentStatusBar()
         val arguments = requireArguments()
         val path = requireNotNull(arguments.getString(PATH_ARG_KEY)) { "'$PATH_ARG_KEY' missing" }
         val title = arguments.getString(TITLE_ARG_KEY)
 
         val nightMode = if (Themes.currentTheme.isNightMode) "#night" else ""
-        val url = Uri.parse("${server.baseUrl()}$path$nightMode")
+        val url = "${server.baseUrl()}$path$nightMode".toUri()
         Timber.i("Loading $url")
         webView.loadUrl(url.toString())
 

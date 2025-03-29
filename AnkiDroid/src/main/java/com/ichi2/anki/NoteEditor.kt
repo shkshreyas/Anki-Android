@@ -65,12 +65,14 @@ import androidx.core.content.FileProvider
 import androidx.core.content.IntentCompat
 import androidx.core.content.edit
 import androidx.core.content.res.ResourcesCompat
+import androidx.core.net.toUri
 import androidx.core.os.BundleCompat
 import androidx.core.text.HtmlCompat
 import androidx.core.util.component1
 import androidx.core.util.component2
 import androidx.core.view.MenuProvider
 import androidx.core.view.OnReceiveContentListener
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.core.view.isVisible
 import androidx.draganddrop.DropHelper
 import androidx.fragment.app.Fragment
@@ -134,6 +136,7 @@ import com.ichi2.anki.ui.setupNoteTypeSpinner
 import com.ichi2.anki.utils.ext.isImageOcclusion
 import com.ichi2.anki.utils.ext.sharedPrefs
 import com.ichi2.anki.utils.ext.showDialogFragment
+import com.ichi2.anki.utils.ext.window
 import com.ichi2.anki.widgets.DeckDropDownAdapter.SubtitleListener
 import com.ichi2.annotations.NeedsTest
 import com.ichi2.compat.CompatHelper.Companion.getSerializableCompat
@@ -516,6 +519,7 @@ class NoteEditor :
         view: View,
         savedInstanceState: Bundle?,
     ) {
+        WindowInsetsControllerCompat(window, window.decorView).isAppearanceLightStatusBars = false
         @Suppress("deprecation", "API35 properly handle edge-to-edge")
         requireActivity().window.statusBarColor = Themes.getColorFromAttr(requireContext(), R.attr.appBarColor)
         super.onViewCreated(view, savedInstanceState)
@@ -1190,7 +1194,6 @@ class NoteEditor :
         // adding current note to collection
         requireActivity().withProgress(resources.getString(R.string.saving_facts)) {
             undoableOp {
-                editorNote!!.notetype.put("tags", tags)
                 notetypes.save(editorNote!!.notetype)
                 addNote(editorNote!!, deckId)
             }
@@ -1491,7 +1494,7 @@ class NoteEditor :
         arguments: NoteEditorLauncher,
         intentEnricher: Consumer<Bundle>,
     ) {
-        val intent = arguments.getIntent(requireContext())
+        val intent = arguments.toIntent(requireContext())
         val bundle = arguments.toBundle()
         // Mutate event with additional properties
         intentEnricher.accept(bundle)
@@ -1636,10 +1639,10 @@ class NoteEditor :
     private fun showCardTemplateEditor() {
         val intent = Intent(requireContext(), CardTemplateEditor::class.java)
         // Pass the model ID
-        intent.putExtra("modelId", currentlySelectedNotetype!!.id)
+        intent.putExtra("noteTypeId", currentlySelectedNotetype!!.id)
         Timber.d(
             "showCardTemplateEditor() for model %s",
-            intent.getLongExtra("modelId", NOT_FOUND_NOTE_TYPE),
+            intent.getLongExtra("noteTypeId", NOT_FOUND_NOTE_TYPE),
         )
         // Also pass the note id and ord if not adding new note
         if (!addNote && currentEditedCard != null) {
@@ -2453,7 +2456,7 @@ class NoteEditor :
             AlertDialog
                 .Builder(requireContext())
                 .neutralButton(R.string.help) {
-                    requireAnkiActivity().openUrl(Uri.parse(getString(R.string.link_manual_note_format_toolbar)))
+                    requireAnkiActivity().openUrl(getString(R.string.link_manual_note_format_toolbar).toUri())
                 }.negativeButton(R.string.dialog_cancel)
 
     private fun displayAddToolbarDialog() {
@@ -2585,8 +2588,8 @@ class NoteEditor :
     private val currentlySelectedNotetype: NotetypeJson?
         get() =
             noteTypeSpinner?.selectedItemPosition?.let { position ->
-                allModelIds?.get(position)?.let { modelId ->
-                    getColUnsafe.notetypes.get(modelId)
+                allModelIds?.get(position)?.let { noteTypeId ->
+                    getColUnsafe.notetypes.get(noteTypeId)
                 }
             }
 

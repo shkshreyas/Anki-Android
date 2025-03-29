@@ -25,8 +25,7 @@ import androidx.fragment.app.commit
 import com.ichi2.anki.android.input.ShortcutGroup
 import com.ichi2.anki.android.input.ShortcutGroupProvider
 import com.ichi2.anki.dialogs.customstudy.CustomStudyDialog.CustomStudyAction
-import com.ichi2.anki.dialogs.customstudy.CustomStudyDialogFactory
-import com.ichi2.utils.ExtendedFragmentFactory
+import com.ichi2.themes.setTransparentStatusBar
 import com.ichi2.utils.FragmentFactoryUtils
 import timber.log.Timber
 import kotlin.reflect.KClass
@@ -47,17 +46,12 @@ open class SingleFragmentActivity : AnkiActivity() {
             return
         }
 
-        // This page *may* host the CustomStudyDialog (CongratsPage)
-        // CustomStudyDialog requires a custom factory install during lifecycle or it can
-        // crash during lifecycle resume after background kill
-        val customStudyDialogFactory = CustomStudyDialogFactory { this.getColUnsafe }
-        customStudyDialogFactory.attachToActivity<ExtendedFragmentFactory>(this)
-
         super.onCreate(savedInstanceState)
         if (!ensureStoragePermissions()) {
             return
         }
         setContentView(R.layout.single_fragment_activity)
+        setTransparentStatusBar()
 
         // avoid recreating the fragment on configuration changes
         // the fragment should handle state restoration
@@ -99,8 +93,12 @@ open class SingleFragmentActivity : AnkiActivity() {
         }
     }
 
+    /** Reference to the hosted fragment */
+    val fragment
+        get() = supportFragmentManager.findFragmentByTag(FRAGMENT_TAG)
+
     override val shortcuts: ShortcutGroup?
-        get() = (supportFragmentManager.findFragmentByTag(FRAGMENT_TAG) as? ShortcutGroupProvider)?.shortcuts
+        get() = (fragment as? ShortcutGroupProvider)?.shortcuts
 
     companion object {
         const val FRAGMENT_NAME_EXTRA = "fragmentName"

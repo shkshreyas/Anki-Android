@@ -26,6 +26,7 @@ import android.view.MenuItem
 import android.view.View
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.annotation.CallSuper
 import androidx.annotation.LayoutRes
 import androidx.annotation.VisibleForTesting
 import androidx.appcompat.app.ActionBarDrawerToggle
@@ -36,6 +37,8 @@ import androidx.core.content.pm.ShortcutInfoCompat
 import androidx.core.content.pm.ShortcutManagerCompat
 import androidx.core.graphics.drawable.IconCompat
 import androidx.core.view.GravityCompat
+import androidx.core.view.get
+import androidx.core.view.size
 import androidx.drawerlayout.widget.ClosableDrawerLayout
 import androidx.drawerlayout.widget.DrawerLayout
 import com.google.android.material.color.MaterialColors
@@ -72,6 +75,14 @@ abstract class NavigationDrawerActivity :
      * runnable that will be executed after the drawer has been closed.
      */
     private var pendingRunnable: Runnable? = null
+
+    private val drawerBackCallback =
+        object : OnBackPressedCallback(enabled = false) {
+            override fun handleOnBackPressed() {
+                Timber.d("drawerBackCallback")
+                closeDrawer()
+            }
+        }
 
     override fun setContentView(
         @LayoutRes layoutResID: Int,
@@ -141,13 +152,7 @@ abstract class NavigationDrawerActivity :
             // Decide which action to take when the navigation button is tapped.
             toolbar.setNavigationOnClickListener { onNavigationPressed() }
         }
-        val drawerBackCallback =
-            object : OnBackPressedCallback(isDrawerOpen) {
-                override fun handleOnBackPressed() {
-                    closeDrawer()
-                }
-            }
-        onBackPressedDispatcher.addCallback(drawerBackCallback)
+        setupBackPressedCallbacks()
         // ActionBarDrawerToggle ties together the the proper interactions
         // between the sliding drawer and the action bar app icon
         drawerToggle =
@@ -191,13 +196,24 @@ abstract class NavigationDrawerActivity :
     }
 
     /**
+     * A method which allows control of the ordering of adding the [OnBackPressedCallback]
+     * for the drawer.
+     *
+     * Typically, call super after initialization code, so the drawer takes priority
+     */
+    @CallSuper
+    protected open fun setupBackPressedCallbacks() {
+        onBackPressedDispatcher.addCallback(this, drawerBackCallback)
+    }
+
+    /**
      * Sets selected navigation drawer item
      */
     protected fun selectNavigationItem(itemId: Int) {
         val menu = navigationView!!.menu
         if (itemId == -1) {
-            for (i in 0 until menu.size()) {
-                menu.getItem(i).isChecked = false
+            for (i in 0 until menu.size) {
+                menu[i].isChecked = false
             }
         } else {
             val item = menu.findItem(itemId)

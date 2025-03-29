@@ -16,6 +16,7 @@
 
 package com.ichi2.utils
 
+import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.ContentResolver
 import android.content.Context
@@ -33,6 +34,7 @@ import com.ichi2.anki.R
 import com.ichi2.anki.dialogs.DialogHandler
 import com.ichi2.anki.dialogs.DialogHandlerMessage
 import com.ichi2.anki.dialogs.ImportDialog
+import com.ichi2.anki.onSelectedCsvForImport
 import com.ichi2.anki.showImportDialog
 import com.ichi2.annotations.NeedsTest
 import com.ichi2.compat.CompatHelper
@@ -83,6 +85,7 @@ object ImportUtils {
         FileImporter().showImportUnsuccessfulDialog(activity, errorMessage, exitActivity)
     }
 
+    @SuppressLint("LocaleRootUsage")
     fun isCollectionPackage(filename: String?): Boolean =
         filename != null && (filename.lowercase(Locale.ROOT).endsWith(".colpkg") || "collection.apkg" == filename)
 
@@ -98,6 +101,22 @@ object ImportUtils {
 
     fun isFileAValidDeck(fileName: String): Boolean =
         FileImporter.hasExtension(fileName, "apkg") || FileImporter.hasExtension(fileName, "colpkg")
+
+    @NeedsTest("Verify that only valid text or data file MIME types return true")
+    fun isValidTextOrDataFile(
+        context: Context,
+        uri: Uri,
+    ): Boolean {
+        val mimeType = context.contentResolver.getType(uri)
+        return mimeType in
+            listOf(
+                "text/plain",
+                "text/comma-separated-values",
+                "text/tab-separated-values",
+                "text/csv",
+                "text/tsv",
+            )
+    }
 
     @SuppressWarnings("WeakerAccess")
     open class FileImporter {
@@ -200,7 +219,10 @@ object ImportUtils {
                 }
             }
             val tempOutDir: String
-            if (!isValidPackageName(filename)) {
+            if (isValidTextOrDataFile(context, importPathUri)) {
+                (context as Activity).onSelectedCsvForImport(intent!!)
+                return ImportResult.fromSuccess()
+            } else if (!isValidPackageName(filename)) {
                 return if (isAnkiDatabase(filename)) {
                     // .anki2 files aren't supported by Anki Desktop, we should eventually support them, because we can
                     // but for now, show a "nice" error.
@@ -242,6 +264,7 @@ object ImportUtils {
             return when {
                 isDeckPackage(fileName) -> true
                 isCollectionPackage(fileName) -> true
+                isValidTextOrDataFile(context, importPathUri) -> true
                 else -> false
             }
         }
@@ -398,9 +421,11 @@ object ImportUtils {
                 DialogHandler.storeMessage(dialogMessage.toMessage())
             }
 
+            @SuppressLint("LocaleRootUsage")
             internal fun isDeckPackage(filename: String?): Boolean =
                 filename != null && filename.lowercase(Locale.ROOT).endsWith(".apkg") && "collection.apkg" != filename
 
+            @SuppressLint("LocaleRootUsage")
             fun hasExtension(
                 filename: String,
                 extension: String?,

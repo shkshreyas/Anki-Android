@@ -26,6 +26,7 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import anki.collection.OpChanges
 import anki.collection.OpChangesWithCount
+import anki.config.ConfigKey
 import anki.search.BrowserColumns
 import anki.search.BrowserRow
 import com.ichi2.anki.AnkiDroidApp
@@ -36,6 +37,8 @@ import com.ichi2.anki.CrashReportService
 import com.ichi2.anki.DeckSpinnerSelection.Companion.ALL_DECKS_ID
 import com.ichi2.anki.Flag
 import com.ichi2.anki.PreviewerDestination
+import com.ichi2.anki.browser.FindAndReplaceDialogFragment.Companion.ALL_FIELDS_AS_FIELD
+import com.ichi2.anki.browser.FindAndReplaceDialogFragment.Companion.TAGS_AS_FIELD
 import com.ichi2.anki.browser.RepositionCardsRequest.RepositionData
 import com.ichi2.anki.export.ExportDialogFragment.ExportType
 import com.ichi2.anki.launchCatchingIO
@@ -46,6 +49,8 @@ import com.ichi2.anki.model.CardsOrNotes.NOTES
 import com.ichi2.anki.model.SortType
 import com.ichi2.anki.pages.CardInfoDestination
 import com.ichi2.anki.preferences.SharedPreferencesProvider
+import com.ichi2.anki.utils.ext.normalizeForSearch
+import com.ichi2.anki.utils.ext.setUserFlagForCards
 import com.ichi2.annotations.NeedsTest
 import com.ichi2.libanki.Card
 import com.ichi2.libanki.CardId
@@ -64,6 +69,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.combineTransform
 import kotlinx.coroutines.flow.filter
@@ -92,6 +98,7 @@ import kotlin.math.min
 @NeedsTest("columIndex1/2 config is not not updated on init")
 @NeedsTest("13442: selected deck is not changed, as this affects the reviewer")
 @NeedsTest("search is called after launch()")
+@NeedsTest("default search text updated on init")
 class CardBrowserViewModel(
     private val lastDeckIdRepository: LastDeckIdRepository,
     private val cacheDir: File,
@@ -100,6 +107,9 @@ class CardBrowserViewModel(
     private val manualInit: Boolean = false,
 ) : ViewModel(),
     SharedPreferencesProvider by preferences {
+    var lastSelectedPosition: Int = 0
+    var oldCardTopOffset: Int = 0
+
     // TODO: abstract so we can use a `Context` and `pref_display_filenames_in_browser_key`
     val showMediaFilenames = sharedPrefs().getBoolean("card_browser_show_media_filenames", false)
 
@@ -126,7 +136,7 @@ class CardBrowserViewModel(
      * Whether the browser is working in Cards mode or Notes mode.
      * default: [CARDS]
      * */
-    val flowOfCardsOrNotes = MutableStateFlow(CARDS)
+    private val flowOfCardsOrNotes = MutableStateFlow(CARDS)
     val cardsOrNotes get() = flowOfCardsOrNotes.value
 
     // card that was clicked (not marked)
@@ -138,18 +148,26 @@ class CardBrowserViewModel(
     private val reverseDirectionFlow = MutableStateFlow(ReverseDirection(orderAsc = false))
     val orderAsc get() = reverseDirectionFlow.value.orderAsc
 
-    // TODO: Initial values are temporary - set in init { } as they depend on cardsOrNotes
-    // consider a loading state
-    val flowOfColumn1 = MutableStateFlow(CardBrowserColumn.QUESTION)
-    val flowOfColumn2 = MutableStateFlow(CardBrowserColumn.ANSWER)
-    val column1 get() = flowOfColumn1.value
-    val column2 get() = flowOfColumn2.value
+    /**
+     * A map from column backend key to backend column definition
+     *
+     * @see [flowOfColumnHeadings]
+     */
+    private val flowOfAllColumns = MutableSharedFlow<Map<String, BrowserColumns.Column>>()
 
-    /** Potential headings for the first column */
-    lateinit var column1Candidates: List<BrowserColumns.Column>
+    val flowOfActiveColumns =
+        MutableStateFlow(
+            BrowserColumnCollection(
+                listOf(
+                    CardBrowserColumn.QUESTION,
+                    CardBrowserColumn.ANSWER,
+                ),
+            ),
+        )
 
-    /** Potential headings for the second column */
-    lateinit var column2Candidates: List<BrowserColumns.Column>
+    @get:VisibleForTesting
+    val activeColumns
+        get() = flowOfActiveColumns.value.columns
 
     val flowOfSearchQueryExpanded = MutableStateFlow(false)
 
@@ -167,6 +185,10 @@ class CardBrowserViewModel(
     val flowOfIsTruncated: MutableStateFlow<Boolean> =
         MutableStateFlow(sharedPrefs().getBoolean("isTruncated", false))
     val isTruncated get() = flowOfIsTruncated.value
+
+    var shouldIgnoreAccents: Boolean = false
+
+    var defaultBrowserSearch: String? = null
 
     private val _selectedRows: MutableSet<CardOrNoteId> = Collections.synchronizedSet(LinkedHashSet())
 
@@ -196,6 +218,12 @@ class CardBrowserViewModel(
 
     val lastDeckId: DeckId?
         get() = lastDeckIdRepository.lastDeckId
+
+    private suspend fun initDefaultSearch() =
+        withCol {
+            shouldIgnoreAccents = config.getBool(ConfigKey.Bool.IGNORE_ACCENTS_IN_SEARCH)
+            defaultBrowserSearch = config.getString(ConfigKey.String.DEFAULT_SEARCH_TEXT)
+        }
 
     suspend fun setDeckId(deckId: DeckId) {
         Timber.i("setting deck: %d", deckId)
@@ -236,6 +264,17 @@ class CardBrowserViewModel(
     }
 
     val flowOfInitCompleted = MutableStateFlow(false)
+
+    val flowOfColumnHeadings: StateFlow<List<ColumnHeading>> =
+        combine(flowOfActiveColumns, flowOfCardsOrNotes, flowOfAllColumns) { activeColumns, cardsOrNotes, allColumns ->
+            Timber.d("updated headings for %d columns", activeColumns.count)
+            activeColumns.columns.map {
+                ColumnHeading(
+                    label = allColumns[it.ankiColumnKey]!!.getLabel(cardsOrNotes),
+                )
+            }
+            // stateIn is required for tests
+        }.stateIn(viewModelScope, SharingStarted.Eagerly, initialValue = emptyList())
 
     /**
      * Whether the task launched from CardBrowserViewModel.init has completed.
@@ -283,16 +322,6 @@ class CardBrowserViewModel(
             null -> {}
         }
 
-        flowOfColumn1
-            .ignoreValuesFromViewModelLaunch()
-            .onEach { column1 -> updateColumnCollection { toUpdate -> toUpdate[0] = column1 } }
-            .launchIn(viewModelScope)
-
-        flowOfColumn2
-            .ignoreValuesFromViewModelLaunch()
-            .onEach { column2 -> updateColumnCollection { toUpdate -> toUpdate[1] = column2 } }
-            .launchIn(viewModelScope)
-
         performSearchFlow
             .onEach {
                 launchSearchForCards()
@@ -308,18 +337,31 @@ class CardBrowserViewModel(
             .onEach { sortType -> withCol { sortType.save(config, sharedPrefs()) } }
             .launchIn(viewModelScope)
 
+        flowOfCardsOrNotes
+            .onEach { cardsOrNotes ->
+                Timber.d("loading columns for %s mode", cardsOrNotes)
+                updateActiveColumns(BrowserColumnCollection.load(sharedPrefs(), cardsOrNotes))
+            }.launchIn(viewModelScope)
+
         viewModelScope.launch {
+            initDefaultSearch()
+            // Prioritize intent-based search
+            if (searchTerms.isEmpty()) {
+                val defaultSearchText = withCol { config.getString(ConfigKey.String.DEFAULT_SEARCH_TEXT) }
+
+                Timber.d("Default search term text: $defaultSearchText")
+                if (defaultSearchText.isNotEmpty()) {
+                    searchTerms = defaultSearchText
+                }
+            }
+
             val initialDeckId = if (selectAllDecks) ALL_DECKS_ID else getInitialDeck()
             // PERF: slightly inefficient if the source was lastDeckId
             setDeckId(initialDeckId)
+            refreshBackendColumns()
+
             val cardsOrNotes = withCol { CardsOrNotes.fromCollection(this@withCol) }
             flowOfCardsOrNotes.update { cardsOrNotes }
-
-            val allColumns = withCol { allBrowserColumns() }.associateBy { it.key }
-            column1Candidates = CardBrowserColumn.COLUMN1_KEYS.map { allColumns[it.ankiColumnKey]!! }
-            column2Candidates = CardBrowserColumn.COLUMN2_KEYS.map { allColumns[it.ankiColumnKey]!! }
-
-            setupColumns(cardsOrNotes)
 
             withCol {
                 sortTypeFlow.update { SortType.fromCol(config, cardsOrNotes, sharedPrefs()) }
@@ -329,17 +371,46 @@ class CardBrowserViewModel(
 
             if (!manualInit) {
                 flowOfInitCompleted.update { true }
+                launchSearchForCards()
             }
         }
     }
 
-    private suspend fun setupColumns(cardsOrNotes: CardsOrNotes) {
-        Timber.d("loading columns columns for %s mode", cardsOrNotes)
-        val columns = BrowserColumnCollection.load(sharedPrefs(), cardsOrNotes)
-        flowOfColumn1.update { columns.columns[0] }
-        flowOfColumn2.update { columns.columns[1] }
+    /**
+     * Called if `onCreate` is called again, which may be due to the collection being reopened
+     *
+     * If this is the case, the backend has lost the active columns state, which is required for
+     * [transformBrowserRow]
+     */
+    fun onReinit() {
+        // this can occur after process death, if so, the ViewModel starts normally
+        if (!initCompleted) return
 
+        Timber.d("onReinit: executing")
+
+        // we currently have no way to test whether setActiveBrowserColumns was called
+        // so set it again. This needs to be done immediately to ensure that the RecyclerView
+        // gets correct values when initialized
+        CollectionManager
+            .getBackend()
+            .setActiveBrowserColumns(flowOfActiveColumns.value.backendKeys)
+
+        // if the language has changed, the backend column labels may have changed
+        viewModelScope.launch {
+            refreshBackendColumns()
+        }
+    }
+
+    /** Handles an update to the list of backend columns */
+    private suspend fun refreshBackendColumns() {
+        flowOfAllColumns.emit(withCol { allBrowserColumns() }.associateBy { it.key })
+    }
+
+    /** Handles an update of the visible columns */
+    private suspend fun updateActiveColumns(columns: BrowserColumnCollection) {
+        Timber.d("updating active columns")
         withCol { backend.setActiveBrowserColumns(columns.backendKeys) }
+        flowOfActiveColumns.update { columns }
     }
 
     @VisibleForTesting
@@ -402,7 +473,6 @@ class CardBrowserViewModel(
                 newValue.saveToCollection(this@withCol)
             }
             flowOfCardsOrNotes.update { newValue }
-            setupColumns(newValue)
         }
 
     fun setTruncated(value: Boolean) {
@@ -411,6 +481,22 @@ class CardBrowserViewModel(
         }
         sharedPrefs().edit {
             putBoolean("isTruncated", value)
+        }
+    }
+
+    fun setIgnoreAccents(value: Boolean) {
+        Timber.d("Setting ignore accent in search to: $value")
+        viewModelScope.launch {
+            shouldIgnoreAccents = value
+            withCol { config.setBool(ConfigKey.Bool.IGNORE_ACCENTS_IN_SEARCH, value) }
+        }
+    }
+
+    fun setDefaultSearchText(text: String) {
+        Timber.d("Setting default search text to: $text")
+        viewModelScope.launch {
+            defaultBrowserSearch = text
+            withCol { config.setString(ConfigKey.String.DEFAULT_SEARCH_TEXT, text) }
         }
     }
 
@@ -497,18 +583,18 @@ class CardBrowserViewModel(
 
     fun hasSelectedAllDecks(): Boolean = lastDeckId == ALL_DECKS_ID
 
-    suspend fun changeCardOrder(which: SortType): Job? {
+    fun changeCardOrder(which: SortType) {
         val changeType =
             when {
                 which != order -> ChangeCardOrder.OrderChange(which)
                 // if the same element is selected again, reverse the order
                 which != SortType.NO_SORTING -> ChangeCardOrder.DirectionChange
                 else -> null
-            } ?: return null
+            } ?: return
 
         Timber.i("updating order: %s", changeType)
 
-        return when (changeType) {
+        when (changeType) {
             is ChangeCardOrder.OrderChange -> {
                 sortTypeFlow.update { which }
                 reverseDirectionFlow.update { ReverseDirection(orderAsc = false) }
@@ -517,20 +603,52 @@ class CardBrowserViewModel(
             ChangeCardOrder.DirectionChange -> {
                 reverseDirectionFlow.update { ReverseDirection(orderAsc = !orderAsc) }
                 cards.reverse()
-                flowOfSearchState.emit(SearchState.Completed)
-                null
+                viewModelScope.launch { flowOfSearchState.emit(SearchState.Completed) }
             }
         }
     }
 
-    fun setColumn1(value: CardBrowserColumn) {
-        Timber.d("updating column 1 to %s", value)
-        flowOfColumn1.update { value }
-    }
+    /**
+     * Updates the backend with a new collection of columns
+     *
+     * @param columns the new columns to use
+     * @param cardsOrNotes the mode to update columns for. If this is the active mode, then flows
+     *  will be updated with the new columns
+     *
+     * @return Whether the operation was successful (a valid list was provided, and it was a change)
+     */
+    @CheckResult
+    fun updateActiveColumns(
+        columns: List<CardBrowserColumn>,
+        cardsOrNotes: CardsOrNotes,
+    ): Boolean {
+        if (columns.isEmpty()) {
+            Timber.d("updateColumns: no columns")
+            return false
+        }
+        if (activeColumns == columns) {
+            Timber.d("updateColumns: no changes")
+            return false
+        }
 
-    fun setColumn2(value: CardBrowserColumn) {
-        Timber.d("updating column 2 to %s", value)
-        flowOfColumn2.update { value }
+        // update the backend with the new columns
+        val columnCollection =
+            BrowserColumnCollection.replace(sharedPrefs(), cardsOrNotes, columns).newColumns
+
+        // A user can edit the non-active columns if they:
+        // * Edit the cards/notes setting in the browser options
+        // * Edit the visible columns
+        // * Save the columns and discard the options changes
+        val isEditingCurrentHeadings = cardsOrNotes == this.cardsOrNotes
+        Timber.d("editing columns for current headings: %b", isEditingCurrentHeadings)
+
+        if (isEditingCurrentHeadings) {
+            viewModelScope.launch {
+                updateActiveColumns(columnCollection)
+            }
+        }
+
+        return true
     }
 
     /**
@@ -612,6 +730,7 @@ class CardBrowserViewModel(
     /**
      * Obtains data to be displayed to the user then sent to [repositionSelectedRows]
      */
+    @NeedsTest("verify behavior for repositioning with 'Randomize order'")
     suspend fun prepareToRepositionCards(): RepositionCardsRequest {
         val selectedCardIds = queryAllSelectedCardIds()
         // Only new cards may be repositioned (If any non-new found show error dialog and return false)
@@ -622,17 +741,22 @@ class CardBrowserViewModel(
         // query obtained from Anki Desktop
         // https://github.com/ankitects/anki/blob/1fb1cbbf85c48a54c05cb4442b1b424a529cac60/qt/aqt/operations/scheduling.py#L117
         try {
-            val (min, max) =
-                withCol {
-                    db.query("select min(due), max(due) from cards where type=? and odid=0", CardType.New.code).use {
-                        it.moveToNext()
-                        return@withCol Pair(max(0, it.getInt(0)), it.getInt(1))
-                    }
-                }
-            return RepositionData(
-                min = min,
-                max = max,
-            )
+            return withCol {
+                val (min, max) =
+                    db
+                        .query("select min(due), max(due) from cards where type=? and odid=0", CardType.New.code)
+                        .use {
+                            it.moveToNext()
+                            Pair(max(0, it.getInt(0)), it.getInt(1))
+                        }
+                val defaults = sched.repositionDefaults()
+                RepositionData(
+                    min = min,
+                    max = max,
+                    random = defaults.random,
+                    shift = defaults.shift,
+                )
+            }
         } catch (e: Exception) {
             // TODO: Remove this once we've verified no production errors
             Timber.w(e, "getting min/max position")
@@ -648,11 +772,16 @@ class CardBrowserViewModel(
      * @see [com.ichi2.libanki.sched.Scheduler.sortCards]
      * @return the number of cards which were repositioned
      */
-    suspend fun repositionSelectedRows(position: Int): Int {
+    suspend fun repositionSelectedRows(
+        position: Int,
+        step: Int,
+        shuffle: Boolean,
+        shift: Boolean,
+    ): Int {
         val ids = queryAllSelectedCardIds()
         Timber.d("repositioning %d cards to %d", ids.size, position)
         return undoableOp {
-            sched.sortCards(cids = ids, position, step = 1, shuffle = false, shift = true)
+            sched.sortCards(cids = ids, position, step = step, shuffle = shuffle, shift = shift)
         }.count
     }
 
@@ -661,18 +790,6 @@ class CardBrowserViewModel(
         get() = cards.size
 
     fun getRowAtPosition(position: Int) = cards[position]
-
-    override fun onCleared() {
-        super.onCleared()
-        invalidate()
-    }
-
-    private fun invalidate() {
-        Timber.d("invalidate")
-        // TODO: this may no longer be needed now we call invalidate from onCleared
-        cards.clear()
-        selectNone()
-    }
 
     private suspend fun updateSavedSearches(func: MutableMap<String, String>.() -> Unit): Map<String, String> {
         val filters = savedSearches().toMutableMap()
@@ -815,7 +932,7 @@ class CardBrowserViewModel(
 
     suspend fun updateSelectedCardsFlag(flag: Flag): List<CardId> {
         val idsToChange = queryAllSelectedCardIds()
-        withCol { setUserFlag(flag, cids = idsToChange) }
+        undoableOp { setUserFlagForCards(cids = idsToChange, flag = flag) }
         return idsToChange
     }
 
@@ -824,65 +941,127 @@ class CardBrowserViewModel(
      */
     fun endMultiSelectMode() = selectNone()
 
-    suspend fun launchSearchForCards(searchQuery: String): Job? {
-        searchTerms = searchQuery
-        return launchSearchForCards()
+    /**
+     * @param forceRefresh if `true`, perform a search even if the search query is unchanged
+     */
+    fun launchSearchForCards(
+        searchQuery: String,
+        forceRefresh: Boolean = true,
+    ) {
+        if (!forceRefresh && searchTerms == searchQuery) {
+            Timber.d("skipping duplicate search: forceRefresh is false")
+            return
+        }
+        searchTerms =
+            if (shouldIgnoreAccents) {
+                searchQuery.normalizeForSearch()
+            } else {
+                searchQuery
+            }
+
+        viewModelScope.launch {
+            launchSearchForCards()
+        }
     }
 
     /**
      * @see com.ichi2.anki.searchForRows
      */
     @NeedsTest("Invalid searches are handled. For instance: 'and'")
-    suspend fun launchSearchForCards(): Job? {
-        if (!initCompleted) return null
-        // update the UI while we're searching
-        clearCardsList()
+    fun launchSearchForCards() {
+        if (!initCompleted) return
 
-        val query: String =
-            if (searchTerms.contains("deck:")) {
-                "($searchTerms)"
-            } else {
-                if ("" != searchTerms) "$restrictOnDeck($searchTerms)" else restrictOnDeck
-            }
+        viewModelScope.launch {
+            // update the UI while we're searching
+            clearCardsList()
 
-        searchJob?.cancel()
-        searchJob =
-            launchCatchingIO(
-                errorMessageHandler = { error -> flowOfSearchState.emit(SearchState.Error(error)) },
-            ) {
-                flowOfSearchState.emit(SearchState.Searching)
-                Timber.d("performing search: '%s'", query)
-                val cards = com.ichi2.anki.searchForRows(query, order.toSortOrder(), cardsOrNotes)
-                Timber.d("Search returned %d card(s)", cards.size)
+            val query: String =
+                if (searchTerms.contains("deck:")) {
+                    "($searchTerms)"
+                } else {
+                    if ("" != searchTerms) "$restrictOnDeck($searchTerms)" else restrictOnDeck
+                }
 
-                ensureActive()
-                this@CardBrowserViewModel.cards.replaceWith(cardsOrNotes, cards)
-                flowOfSearchState.emit(SearchState.Completed)
-            }
-        return searchJob!!
+            searchJob?.cancel()
+            searchJob =
+                launchCatchingIO(
+                    errorMessageHandler = { error -> flowOfSearchState.emit(SearchState.Error(error)) },
+                ) {
+                    flowOfSearchState.emit(SearchState.Searching)
+                    Timber.d("performing search: '%s'", query)
+                    val cards = com.ichi2.anki.searchForRows(query, order.toSortOrder(), cardsOrNotes)
+                    Timber.d("Search returned %d card(s)", cards.size)
+
+                    ensureActive()
+                    this@CardBrowserViewModel.cards.replaceWith(cardsOrNotes, cards)
+                    flowOfSearchState.emit(SearchState.Completed)
+                }
+        }
     }
 
-    private suspend fun refreshSearch() = launchSearchForCards()?.join()
+    private fun refreshSearch() = launchSearchForCards()
 
     private suspend fun clearCardsList() {
         cards.reset()
         flowOfCardsUpdated.emit(Unit)
     }
 
-    private suspend fun updateColumnCollection(block: (MutableList<CardBrowserColumn?>) -> Unit) {
-        Timber.d("updateColumnCollection")
-        val columns =
-            BrowserColumnCollection.update(sharedPrefs(), cardsOrNotes) {
-                block(it)
-                return@update true
-            } ?: return
-
-        withCol { backend.setActiveBrowserColumns(columns.backendKeys) }
-    }
-
     suspend fun queryCardIdAtPosition(index: Int): CardId = cards.queryCardIdsAt(index).first()
 
     suspend fun querySelectedCardIdAtPosition(index: Int): CardId = selectedRows.toList()[index].toCardId(cardsOrNotes)
+
+    /**
+     * Obtains two lists of column headings with preview data
+     * (preview uses the first row of data, if it exists)
+     *
+     * The two lists are:
+     * (1): An ordered list of columns which is displayed to the user
+     * (2): A list of columns which are available to display to the user
+     */
+    suspend fun previewColumnHeadings(cardsOrNotes: CardsOrNotes): Pair<List<ColumnWithSample>, List<ColumnWithSample>> {
+        val currentColumns =
+            when {
+                // if we match, use the loaded the columns
+                cardsOrNotes == this.cardsOrNotes -> activeColumns
+                else -> BrowserColumnCollection.load(sharedPrefs(), cardsOrNotes).columns
+            }
+
+        val columnsWithSample = ColumnWithSample.loadSample(cards.firstOrNull(), cardsOrNotes)
+
+        // we return this as two lists as 'currentColumns' uses the collection ordering
+        return Pair(
+            columnsWithSample
+                .filter { currentColumns.contains(it.columnType) }
+                .sortedBy { currentColumns.indexOf(it.columnType) },
+            columnsWithSample.filter { !currentColumns.contains(it.columnType) },
+        )
+    }
+
+    /**
+     * Replaces occurrences of search with the new value.
+     *
+     * @return the number of affected notes
+     * @see com.ichi2.libanki.Collection.findReplace
+     * @see com.ichi2.libanki.Tags.findAndReplace
+     */
+    fun findAndReplace(result: FindReplaceResult) =
+        viewModelScope.async {
+            // TODO pass the selection as the user saw it in the dialog to avoid running "find
+            //  and replace" on a different selection
+            val noteIds = if (result.onlyOnSelectedNotes) queryAllSelectedNoteIds() else emptyList()
+
+            if (result.field == TAGS_AS_FIELD) {
+                undoableOp {
+                    tags.findAndReplace(noteIds, result.search, result.replacement, result.regex, result.matchCase)
+                }.count
+            } else {
+                val field =
+                    if (result.field == ALL_FIELDS_AS_FIELD) null else result.field
+                undoableOp {
+                    findReplace(noteIds, result.search, result.replacement, result.regex, field, result.matchCase)
+                }.count
+            }
+        }
 
     companion object {
         fun factory(
@@ -941,6 +1120,12 @@ class CardBrowserViewModel(
         data class Error(
             val error: String,
         ) : SearchState
+    }
+
+    fun saveScrollingState(id: CardOrNoteId) {
+        cards.indexOf(id).takeIf { it >= 0 }?.let { position ->
+            lastSelectedPosition = position
+        }
     }
 }
 
@@ -1004,6 +1189,8 @@ sealed class RepositionCardsRequest {
     class RepositionData(
         val min: Int?,
         val max: Int?,
+        val random: Boolean = false,
+        val shift: Boolean = false,
     ) : RepositionCardsRequest() {
         val queueTop: Int?
         val queueBottom: Int?
@@ -1028,3 +1215,7 @@ sealed class RepositionCardsRequest {
 }
 
 fun BrowserColumns.Column.getLabel(cardsOrNotes: CardsOrNotes): String = if (cardsOrNotes == CARDS) cardsModeLabel else notesModeLabel
+
+data class ColumnHeading(
+    val label: String,
+)

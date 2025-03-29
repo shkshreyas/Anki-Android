@@ -16,31 +16,58 @@
 
 package com.ichi2.testutils
 
+import com.ichi2.utils.JSONObjectHolder
+import org.hamcrest.BaseMatcher
 import org.hamcrest.Description
 import org.json.JSONObject
 
 fun isJsonEqual(value: JSONObject) = IsJsonEqual(value)
 
+fun isJsonEqual(value: String) = IsJsonEqual(JSONObject(value))
+
+private fun matchesJsonValue(
+    expectedValue: JSONObject,
+    actualValue: JSONObject,
+): Boolean {
+    // Checks the objects have the same keys
+    if (expectedValue.keys().asSequence().toSet() != actualValue.keys().asSequence().toSet()) {
+        return false
+    }
+    // And that each key have the same associated values in both object.
+    for (key in expectedValue.keys()) {
+        if (expectedValue[key] != actualValue[key]) {
+            return false
+        }
+    }
+    return true
+}
+
 // TODO: This doesn't describe the inputs in the correct order
 // TODO: This should return the keys which do not match
 class IsJsonEqual(
     private val expectedValue: JSONObject,
-) : org.hamcrest.BaseMatcher<JSONObject>() {
+) : BaseMatcher<JSONObject>() {
     override fun describeTo(description: Description?) {
         description?.appendValue(expectedValue)
     }
 
     override fun matches(item: Any?): Boolean {
         if (item !is JSONObject) return false
-
-        val expectedMap = expectedValue.keys().asSequence().associateWith { item[it] }
-
-        val itemKeys = item.keys().asSequence().toList()
-        val differentKeys =
-            itemKeys
-                .associateWith { item[it] }
-                .filter { expectedMap[it.key].toString() != it.value.toString() }
-
-        return differentKeys.isEmpty() && expectedMap.size == itemKeys.size
+        return matchesJsonValue(expectedValue, item)
     }
 }
+
+class IsJsonHolderEqual(
+    private val expectedValue: JSONObject,
+) : BaseMatcher<JSONObjectHolder>() {
+    override fun matches(item: Any?): Boolean {
+        if (item !is JSONObjectHolder) return false
+        return matchesJsonValue(expectedValue, item.jsonObject)
+    }
+
+    override fun describeTo(description: Description?) {
+        description?.appendValue(expectedValue)
+    }
+}
+
+fun isJsonHolderEqual(expectedValue: String) = IsJsonHolderEqual(JSONObject(expectedValue))

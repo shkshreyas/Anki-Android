@@ -21,9 +21,10 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Insets
 import android.graphics.Paint
-import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
+import android.os.Build
 import android.util.AttributeSet
 import android.util.DisplayMetrics
 import android.util.TypedValue
@@ -33,6 +34,7 @@ import android.view.KeyEvent
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.view.WindowInsets
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import androidx.annotation.ColorInt
@@ -40,7 +42,10 @@ import androidx.annotation.DrawableRes
 import androidx.annotation.IdRes
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.widget.AppCompatImageButton
+import androidx.core.graphics.createBitmap
+import androidx.core.graphics.drawable.toDrawable
 import androidx.core.view.children
+import androidx.core.view.isVisible
 import androidx.vectordrawable.graphics.drawable.VectorDrawableCompat
 import com.ichi2.anki.AnkiDroidApp
 import com.ichi2.anki.NoteEditor
@@ -234,10 +239,23 @@ class Toolbar : FrameLayout {
     private val screenWidth: Int
         get() {
             val displayMetrics = DisplayMetrics()
-            (context as Activity)
-                .windowManager
-                .defaultDisplay
-                .getMetrics(displayMetrics)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                val windowMetrics =
+                    (context as Activity)
+                        .windowManager
+                        .currentWindowMetrics
+                val insets: Insets =
+                    windowMetrics.getWindowInsets().getInsetsIgnoringVisibility(
+                        WindowInsets.Type.navigationBars()
+                            or WindowInsets.Type.displayCutout(),
+                    )
+                displayMetrics.widthPixels = windowMetrics.bounds.width() - (insets.right + insets.left)
+            } else {
+                (context as Activity)
+                    .windowManager
+                    .defaultDisplay
+                    .getMetrics(displayMetrics)
+            }
             return displayMetrics.widthPixels
         }
 
@@ -292,14 +310,14 @@ class Toolbar : FrameLayout {
     fun createDrawableForString(text: String): Drawable {
         val baseline = -stringPaint!!.ascent()
         val size = (baseline + stringPaint!!.descent() + 0.5f).toInt()
-        val image = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+        val image = createBitmap(size, size, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(image)
         canvas.drawText(text, size / 2f, baseline, stringPaint!!)
-        return BitmapDrawable(resources, image)
+        return image.toDrawable(resources)
     }
 
     /** Returns the number of top-level children of [layout] that are visible */
-    private fun getVisibleItemCount(layout: LinearLayout): Int = ViewGroupUtils.getAllChildren(layout).count { it.visibility == VISIBLE }
+    private fun getVisibleItemCount(layout: LinearLayout): Int = ViewGroupUtils.getAllChildren(layout).count { it.isVisible }
 
     private fun addViewToToolbar(button: AppCompatImageButton) {
         val expectedWidth = getVisibleItemCount(toolbar) * convertDpToPixel(48F, context)

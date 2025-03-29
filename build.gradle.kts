@@ -1,7 +1,6 @@
 
 import com.android.build.api.dsl.CommonExtension
 import com.android.build.api.extension.impl.AndroidComponentsExtensionImpl
-import com.android.ide.common.util.parseIntOrDefault
 import com.slack.keeper.optInToKeeper
 import org.gradle.api.tasks.testing.logging.TestExceptionFormat
 import org.gradle.internal.jvm.Jvm
@@ -17,7 +16,6 @@ plugins {
     alias(libs.plugins.kotlin.jvm) apply false
     alias(libs.plugins.kotlin.serialization) apply false
     alias(libs.plugins.ktlint.gradle.plugin) apply false
-    alias(libs.plugins.dokka) apply false
     alias(libs.plugins.keeper) apply false
 }
 
@@ -153,3 +151,5 @@ val gradleTestMaxParallelForks by extra(
         max(1, Runtime.getRuntime().availableProcessors() / 2)
     }
 )
+
+private fun String?.parseIntOrDefault(defaultValue: Int): Int = this?.toIntOrNull() ?: defaultValue

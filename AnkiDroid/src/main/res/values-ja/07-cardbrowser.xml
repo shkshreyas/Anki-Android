@@ -105,4 +105,12 @@
     <!--Keyboard shortcuts dialog-->
     <string name="edit_tags_dialog" comment="Description of the shortcut that opens the edit tags dialog">タグダイアログを編集</string>
     <string name="show_order_dialog" comment="Description of the shortcut that shows the order dialog">表示順ダイアログを表示</string>
+    <!-- Manage columns dialog -->
+    <string name="browse_manage_columns_main_heading">列</string>
+    <string name="browse_manage_columns">リストの列を管理</string>
+    <string name="user_active_columns">使用中</string>
+    <string name="user_potential_columns">使用可能</string>
+    <string name="include_column">この列をブラウザのリストで使用</string>
+    <string name="exclude_column">この列をブラウザのリストから除外</string>
+    <string name="browser_find_replace_loading_fields">フィールド名を取得しています&#8230;</string>
 </resources>

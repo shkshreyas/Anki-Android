@@ -61,7 +61,6 @@ import com.ichi2.anki.utils.ext.sharedPrefs
 import com.ichi2.anki.utils.ext.showDialogFragment
 import com.ichi2.anki.withProgress
 import com.ichi2.annotations.NeedsTest
-import com.ichi2.libanki.Collection
 import com.ichi2.libanki.Consts
 import com.ichi2.libanki.Consts.DynPriority
 import com.ichi2.libanki.Deck
@@ -69,6 +68,7 @@ import com.ichi2.libanki.DeckId
 import com.ichi2.libanki.undoableOp
 import com.ichi2.utils.BundleUtils.getNullableInt
 import com.ichi2.utils.KotlinCleanup
+import com.ichi2.utils.bundleOfNotNull
 import com.ichi2.utils.cancelable
 import com.ichi2.utils.customView
 import com.ichi2.utils.dp
@@ -77,6 +77,7 @@ import com.ichi2.utils.positiveButton
 import com.ichi2.utils.setPaddingRelative
 import com.ichi2.utils.textAsIntOrNull
 import com.ichi2.utils.title
+import kotlinx.coroutines.runBlocking
 import net.ankiweb.rsdroid.exceptions.BackendDeckIsFilteredException
 import org.json.JSONObject
 import timber.log.Timber
@@ -112,10 +113,9 @@ import timber.log.Timber
  *     * [sched.proto: CustomStudyRequest](https://github.com/search?q=repo%3Aankitects%2Fanki+CustomStudyRequest+language%3A%22Protocol+Buffer%22&type=code&l=Protocol+Buffer)
  * * [https://github.com/ankitects/anki/blob/main/qt/aqt/customstudy.py](https://github.com/ankitects/anki/blob/main/qt/aqt/customstudy.py)
  */
-@KotlinCleanup("remove 'collection' parameter and use withCol { }")
-class CustomStudyDialog(
-    private val collection: Collection,
-) : AnalyticsDialogFragment(),
+@KotlinCleanup("remove 'runBlocking' calls'")
+class CustomStudyDialog :
+    AnalyticsDialogFragment(),
     TagsDialogListener {
     /** ID of the [Deck] which this dialog was created for */
     private val dialogDeckId: DeckId
@@ -131,21 +131,6 @@ class CustomStudyDialog(
     /** @see CustomStudyDefaults */
     private lateinit var defaults: CustomStudyDefaults
 
-    fun withArguments(
-        did: DeckId,
-        contextMenuAttribute: ContextMenuOption? = null,
-    ): CustomStudyDialog {
-        val args = this.arguments ?: Bundle()
-        args.apply {
-            if (contextMenuAttribute != null) {
-                putInt(ARG_SUB_DIALOG_ID, contextMenuAttribute.ordinal)
-            }
-            putLong(ARG_DID, did)
-        }
-        this.arguments = args
-        return this
-    }
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         registerFragmentResultReceiver()
@@ -154,11 +139,11 @@ class CustomStudyDialog(
     override fun onCreateDialog(savedInstanceState: Bundle?): Dialog {
         super.onCreate(savedInstanceState)
         val option = selectedSubDialog
-        this.defaults = collection.sched.customStudyDefaults(dialogDeckId).toDomainModel()
+        this.defaults = runBlocking { withCol { sched.customStudyDefaults(dialogDeckId).toDomainModel() } }
         return if (option == null) {
             Timber.i("Showing Custom Study main menu")
             // Select the specified deck
-            collection.decks.select(dialogDeckId)
+            runBlocking { withCol { decks.select(dialogDeckId) } }
             buildContextMenu()
         } else {
             Timber.i("Showing Custom Study dialog: $option")
@@ -170,33 +155,33 @@ class CustomStudyDialog(
      * Handles selecting an item from the main menu of the dialog
      */
     private fun onMenuItemSelected(item: ContextMenuOption) =
-        when (item) {
-            STUDY_TAGS -> {
+        launchCatchingTask {
+            when (item) {
+                STUDY_TAGS -> {
             /*
              * This is a special Dialog for CUSTOM STUDY, where instead of only collecting a
              * number, it is necessary to collect a list of tags. This case handles the creation
              * of that Dialog.
              */
-                val dialogFragment =
-                    TagsDialog().withArguments(
-                        context = requireContext(),
-                        type = TagsDialog.DialogType.CUSTOM_STUDY_TAGS,
-                        checkedTags = ArrayList(),
-                        allTags = ArrayList(collection.tags.byDeck(dialogDeckId)),
-                    )
-                requireActivity().showDialogFragment(dialogFragment)
-            }
-            EXTEND_NEW,
-            EXTEND_REV,
-            STUDY_FORGOT,
-            STUDY_AHEAD,
-            STUDY_PREVIEW,
-            -> {
-                // User asked for a standard custom study option
-                val d =
-                    CustomStudyDialog(collection)
-                        .withArguments(dialogDeckId, item)
-                requireActivity().showDialogFragment(d)
+                    val dialogFragment =
+                        TagsDialog().withArguments(
+                            context = requireContext(),
+                            type = TagsDialog.DialogType.CUSTOM_STUDY_TAGS,
+                            checkedTags = ArrayList(),
+                            allTags = ArrayList(withCol { tags.byDeck(dialogDeckId) }),
+                        )
+                    requireActivity().showDialogFragment(dialogFragment)
+                }
+                EXTEND_NEW,
+                EXTEND_REV,
+                STUDY_FORGOT,
+                STUDY_AHEAD,
+                STUDY_PREVIEW,
+                -> {
+                    // User asked for a standard custom study option
+                    val dialog: CustomStudyDialog = createInstance(dialogDeckId, item)
+                    requireActivity().showDialogFragment(dialog)
+                }
             }
         }
 
@@ -247,6 +232,7 @@ class CustomStudyDialog(
      * Build an input dialog that is used to get a parameter related to custom study from the user
      * @param contextMenuOption the option of the dialog
      */
+    @NeedsTest("17757: fragment not dismissed before result is output")
     private fun buildInputDialog(contextMenuOption: ContextMenuOption): AlertDialog {
         /*
             TODO: Try to change to a standard input dialog (currently the thing holding us back is having the extra
@@ -275,21 +261,45 @@ class CustomStudyDialog(
             }
 
         // Set material dialog parameters
+        @Suppress("RedundantValueArgument") // click = null
         val dialog =
             AlertDialog
                 .Builder(requireActivity())
                 .customView(view = v, paddingStart = 64, paddingEnd = 64, paddingTop = 32, paddingBottom = 32)
-                .positiveButton(R.string.dialog_ok) {
-                    // Get the value selected by user
-                    val n =
-                        editText.textAsIntOrNull() ?: return@positiveButton Unit.also {
-                            Timber.w("Non-numeric user input was provided")
-                            Timber.d("value: %s", editText.text.toString())
-                        }
-                    requireActivity().launchCatchingTask { customStudy(contextMenuOption, n) }
-                }.negativeButton(R.string.dialog_cancel) {
+                .positiveButton(R.string.dialog_ok, click = null)
+                .negativeButton(R.string.dialog_cancel) {
                     requireActivity().dismissAllDialogFragments()
-                }.create() // Added .create() because we wanted to access alertDialog positive button enable state
+                }.create()
+
+        var allowSubmit = true
+        // we set the listener here so 'ok' doesn't immediately close the dialog.
+        // if it did, we would not have had time to execute the method, and would not be
+        // able to output a fragment result
+        dialog.setOnShowListener {
+            dialog.positiveButton.setOnClickListener {
+                // prevent race conditions
+                if (!allowSubmit) return@setOnClickListener
+                allowSubmit = false
+
+                // Get the value selected by user
+                val n =
+                    editText.textAsIntOrNull() ?: run {
+                        Timber.w("Non-numeric user input was provided")
+                        Timber.d("value: %s", editText.text.toString())
+                        allowSubmit = true
+                        return@setOnClickListener
+                    }
+
+                requireActivity().launchCatchingTask {
+                    try {
+                        customStudy(contextMenuOption, n)
+                    } finally {
+                        requireActivity().dismissAllDialogFragments()
+                    }
+                }
+            }
+        }
+
         editText.doAfterTextChanged {
             dialog.positiveButton.isEnabled = editText.textAsIntOrNull() != null
         }
@@ -318,21 +328,15 @@ class CustomStudyDialog(
                 }
             }
 
-        try {
-            undoableOp {
-                collection.sched.customStudy(request)
+        undoableOp { sched.customStudy(request) }
+        val action =
+            when (contextMenuOption) {
+                EXTEND_NEW, EXTEND_REV -> CustomStudyAction.EXTEND_STUDY_LIMITS
+                STUDY_FORGOT, STUDY_AHEAD, STUDY_PREVIEW -> CustomStudyAction.CUSTOM_STUDY_SESSION
+                STUDY_TAGS -> TODO("This branch has not been covered before")
             }
-            val action =
-                when (contextMenuOption) {
-                    EXTEND_NEW, EXTEND_REV -> CustomStudyAction.EXTEND_STUDY_LIMITS
-                    STUDY_FORGOT, STUDY_AHEAD, STUDY_PREVIEW -> CustomStudyAction.CUSTOM_STUDY_SESSION
-                    STUDY_TAGS -> TODO("This branch has not been covered before")
-                }
 
-            setFragmentResult(CustomStudyAction.REQUEST_KEY, bundleOf(CustomStudyAction.BUNDLE_KEY to action.ordinal))
-        } finally {
-            requireActivity().dismissAllDialogFragments()
-        }
+        setFragmentResult(CustomStudyAction.REQUEST_KEY, bundleOf(CustomStudyAction.BUNDLE_KEY to action.ordinal))
 
         // save the default values (not in upstream)
         when (contextMenuOption) {
@@ -364,13 +368,17 @@ class CustomStudyDialog(
             }
             sb.append("(").append(arr.joinToString(" or ")).append(")")
         }
-        createTagsCustomStudySession(
-            arrayOf(
-                sb.toString(),
-                Consts.DYN_MAX_SIZE,
-                Consts.DYN_RANDOM,
-            ),
-        )
+        activity?.launchCatchingTask {
+            withProgress {
+                createTagsCustomStudySession(
+                    arrayOf(
+                        sb.toString(),
+                        Consts.DYN_MAX_SIZE,
+                        Consts.DYN_RANDOM,
+                    ),
+                )
+            }
+        }
     }
 
     /** Line 1 of the number entry dialog */
@@ -423,13 +431,12 @@ class CustomStudyDialog(
      * Create a custom study session
      * @param terms search terms
      */
-    private fun createTagsCustomStudySession(terms: Array<Any>) {
+    private suspend fun createTagsCustomStudySession(terms: Array<Any>) {
         val dyn: Deck
 
-        val decks = collection.decks
-        val deckToStudyName = decks.name(dialogDeckId)
+        val deckToStudyName = withCol { decks.name(dialogDeckId) }
         val customStudyDeck = resources.getString(R.string.custom_study_deck_name)
-        val cur = decks.byName(customStudyDeck)
+        val cur = withCol { decks.byName(customStudyDeck) }
         if (cur != null) {
             Timber.i("Found deck: '%s'", customStudyDeck)
             if (cur.isNormal) {
@@ -439,16 +446,16 @@ class CustomStudyDialog(
             } else {
                 Timber.i("Emptying dynamic deck '%s' for custom study", customStudyDeck)
                 // safe to empty
-                collection.sched.emptyDyn(cur.getLong("id"))
+                withCol { sched.emptyDyn(cur.getLong("id")) }
                 // reuse; don't delete as it may have children
                 dyn = cur
-                decks.select(cur.getLong("id"))
+                withCol { decks.select(cur.getLong("id")) }
             }
         } else {
             Timber.i("Creating Dynamic Deck '%s' for custom study", customStudyDeck)
             dyn =
                 try {
-                    decks.get(decks.newFiltered(customStudyDeck))!!
+                    withCol { decks.get(decks.newFiltered(customStudyDeck))!! }
                 } catch (ex: BackendDeckIsFilteredException) {
                     showThemedToast(requireActivity(), ex.localizedMessage ?: ex.message ?: "", true)
                     return
@@ -457,7 +464,7 @@ class CustomStudyDialog(
         // and then set various options
         dyn.put("delays", JSONObject.NULL)
         val ar = dyn.getJSONArray("terms")
-        ar.getJSONArray(0).put(0, """deck:"$deckToStudyName" terms[0]""")
+        ar.getJSONArray(0).put(0, """deck:"$deckToStudyName" ${terms[0]}""")
         ar.getJSONArray(0).put(1, terms[1])
         @DynPriority val priority = terms[2] as Int
         ar.getJSONArray(0).put(2, priority)
@@ -465,24 +472,17 @@ class CustomStudyDialog(
         // Rebuild the filtered deck
         Timber.i("Rebuilding Custom Study Deck")
         // PERF: Should be in background
-        collection.decks.save(dyn)
-        // launch this in the activity scope, rather than the fragment scope
-        requireActivity().launchCatchingTask { rebuildDynamicDeck() }
+        withCol { decks.save(dyn) }
+        Timber.d("Rebuilding dynamic deck...")
+        withCol { sched.rebuildDyn(decks.selected()) }
+        setFragmentResult(
+            CustomStudyAction.REQUEST_KEY,
+            bundleOf(
+                CustomStudyAction.BUNDLE_KEY to CustomStudyAction.CUSTOM_STUDY_SESSION.ordinal,
+            ),
+        )
         // Hide the dialogs (required due to a DeckPicker issue)
         requireActivity().dismissAllDialogFragments()
-    }
-
-    private suspend fun rebuildDynamicDeck() {
-        Timber.d("rebuildDynamicDeck()")
-        withProgress {
-            withCol { sched.rebuildDyn(decks.selected()) }
-            setFragmentResult(
-                CustomStudyAction.REQUEST_KEY,
-                bundleOf(
-                    CustomStudyAction.BUNDLE_KEY to CustomStudyAction.CUSTOM_STUDY_SESSION.ordinal,
-                ),
-            )
-        }
     }
 
     /**
@@ -638,6 +638,18 @@ class CustomStudyDialog(
     }
 
     companion object {
+        fun createInstance(
+            deckId: DeckId,
+            contextMenuAttribute: ContextMenuOption? = null,
+        ): CustomStudyDialog =
+            CustomStudyDialog().apply {
+                arguments =
+                    bundleOfNotNull(
+                        ARG_DID to deckId,
+                        contextMenuAttribute?.let { ARG_SUB_DIALOG_ID to it.ordinal },
+                    )
+            }
+
         /**
          * (required) Key for the [DeckId] this dialog deals with.
          * @see CustomStudyDialog.dialogDeckId

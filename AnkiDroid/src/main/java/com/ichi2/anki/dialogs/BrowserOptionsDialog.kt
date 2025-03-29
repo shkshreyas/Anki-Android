@@ -20,16 +20,22 @@ import android.app.Dialog
 import android.content.DialogInterface
 import android.os.Bundle
 import android.view.View
+import android.widget.Button
 import android.widget.CheckBox
 import android.widget.LinearLayout
 import android.widget.RadioButton
 import android.widget.RadioGroup
+import android.widget.TextView
 import androidx.annotation.IdRes
 import androidx.appcompat.app.AppCompatDialogFragment
 import androidx.core.os.bundleOf
 import androidx.fragment.app.activityViewModels
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import com.google.android.material.textfield.TextInputEditText
+import com.google.android.material.textfield.TextInputLayout
+import com.ichi2.anki.CollectionManager.TR
 import com.ichi2.anki.R
+import com.ichi2.anki.browser.BrowserColumnSelectionFragment
 import com.ichi2.anki.browser.CardBrowserViewModel
 import com.ichi2.anki.model.CardsOrNotes
 import timber.log.Timber
@@ -39,18 +45,35 @@ class BrowserOptionsDialog : AppCompatDialogFragment() {
 
     private val viewModel: CardBrowserViewModel by activityViewModels()
 
+    /** The unsaved value of [CardsOrNotes] */
+    private val dialogCardsOrNotes: CardsOrNotes
+        get() {
+            @IdRes val selectedButtonId =
+                dialogView.findViewById<RadioGroup>(R.id.select_browser_mode).checkedRadioButtonId
+            return when (selectedButtonId) {
+                R.id.select_cards_mode -> CardsOrNotes.CARDS
+                else -> CardsOrNotes.NOTES
+            }
+        }
+
     private val positiveButtonClick = { _: DialogInterface, _: Int ->
-        @IdRes val selectedButtonId =
-            dialogView.findViewById<RadioGroup>(R.id.select_browser_mode).checkedRadioButtonId
-        val newCardsOrNotes =
-            if (selectedButtonId == R.id.select_cards_mode) CardsOrNotes.CARDS else CardsOrNotes.NOTES
-        if (cardsOrNotes != newCardsOrNotes) {
-            viewModel.setCardsOrNotes(newCardsOrNotes)
+        if (cardsOrNotes != dialogCardsOrNotes) {
+            viewModel.setCardsOrNotes(dialogCardsOrNotes)
         }
         val newTruncate = dialogView.findViewById<CheckBox>(R.id.truncate_checkbox).isChecked
 
         if (newTruncate != isTruncated) {
             viewModel.setTruncated(newTruncate)
+        }
+
+        val newIgnoreAccent = dialogView.findViewById<CheckBox>(R.id.ignore_accents_checkbox).isChecked
+        if (newIgnoreAccent != viewModel.shouldIgnoreAccents) {
+            viewModel.setIgnoreAccents(newIgnoreAccent)
+        }
+
+        val newSearchValue = dialogView.findViewById<TextInputEditText>(R.id.default_search_text).text?.toString() ?: ""
+        if (newSearchValue != viewModel.defaultBrowserSearch) {
+            viewModel.setDefaultSearchText(newSearchValue)
         }
     }
 
@@ -92,6 +115,24 @@ class BrowserOptionsDialog : AppCompatDialogFragment() {
             dismiss()
         }
 
+        dialogView.findViewById<Button>(R.id.manage_columns_button).setOnClickListener {
+            openColumnManager()
+        }
+
+        dialogView.findViewById<CheckBox>(R.id.ignore_accents_checkbox).apply {
+            text = TR.preferencesIgnoreAccentsInSearch()
+            isChecked = viewModel.shouldIgnoreAccents
+        }
+
+        dialogView.findViewById<TextInputLayout>(R.id.default_search_input_layout).hint = TR.preferencesDefaultSearchText()
+
+        dialogView.findViewById<TextView>(R.id.browsing_text_view).text = TR.preferencesBrowsing()
+
+        dialogView.findViewById<TextInputEditText>(R.id.default_search_text).apply {
+            hint = TR.preferencesDefaultSearchTextExample()
+            setText(viewModel.defaultBrowserSearch ?: "")
+        }
+
         return MaterialAlertDialogBuilder(requireContext()).run {
             this.setView(dialogView)
             this.setTitle(getString(R.string.browser_options_dialog_heading))
@@ -101,6 +142,12 @@ class BrowserOptionsDialog : AppCompatDialogFragment() {
             this.setPositiveButton(getString(R.string.dialog_ok), DialogInterface.OnClickListener(function = positiveButtonClick))
             this.create()
         }
+    }
+
+    /** Opens [BrowserColumnSelectionFragment] for the current selection of [CardsOrNotes] */
+    private fun openColumnManager() {
+        val dialog = BrowserColumnSelectionFragment.createInstance(viewModel.cardsOrNotes)
+        dialog.show(requireActivity().supportFragmentManager, null)
     }
 
     companion object {

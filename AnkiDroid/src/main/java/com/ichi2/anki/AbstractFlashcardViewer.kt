@@ -22,9 +22,7 @@
 package com.ichi2.anki
 
 import android.annotation.SuppressLint
-import android.annotation.TargetApi
 import android.content.ActivityNotFoundException
-import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
@@ -64,16 +62,20 @@ import android.webkit.WebViewClient
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.RelativeLayout
+import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.ActivityResult
 import androidx.activity.result.ActivityResultCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.CheckResult
 import androidx.annotation.IdRes
+import androidx.annotation.RequiresApi
 import androidx.annotation.VisibleForTesting
 import androidx.appcompat.app.AlertDialog
+import androidx.core.net.toUri
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.core.view.children
+import androidx.core.view.isVisible
 import androidx.lifecycle.Lifecycle.State.RESUMED
 import anki.collection.OpChanges
 import com.drakeet.drawer.FullDraggableContainer
@@ -82,6 +84,7 @@ import com.ichi2.anim.ActivityTransitionAnimation
 import com.ichi2.anki.AbstractFlashcardViewer.Signal.Companion.toSignal
 import com.ichi2.anki.CollectionManager.TR
 import com.ichi2.anki.CollectionManager.withCol
+import com.ichi2.anki.android.back.exitViaDoubleTapBackCallback
 import com.ichi2.anki.cardviewer.AndroidCardRenderContext
 import com.ichi2.anki.cardviewer.AndroidCardRenderContext.Companion.createInstance
 import com.ichi2.anki.cardviewer.CardMediaPlayer
@@ -135,7 +138,6 @@ import com.ichi2.libanki.Card
 import com.ichi2.libanki.CardId
 import com.ichi2.libanki.ChangeManager
 import com.ichi2.libanki.Collection
-import com.ichi2.libanki.Consts
 import com.ichi2.libanki.DeckId
 import com.ichi2.libanki.Decks
 import com.ichi2.libanki.Sound.getAvTag
@@ -146,8 +148,6 @@ import com.ichi2.libanki.undoableOp
 import com.ichi2.themes.Themes
 import com.ichi2.themes.Themes.getResFromAttr
 import com.ichi2.ui.FixedEditText
-import com.ichi2.utils.ClipboardUtil.getText
-import com.ichi2.utils.HandlerUtils.executeFunctionWithDelay
 import com.ichi2.utils.HandlerUtils.newHandler
 import com.ichi2.utils.HashUtil.hashSetInit
 import com.ichi2.utils.Stopwatch
@@ -241,7 +241,6 @@ abstract class AbstractFlashcardViewer :
     internal var easeButton3: EaseButton? = null
     internal var easeButton4: EaseButton? = null
     protected var topBarLayout: RelativeLayout? = null
-    private val clipboard: ClipboardManager? = null
     private var previousAnswerIndicator: PreviousAnswerIndicator? = null
 
     private var currentEase: Ease? = null
@@ -280,9 +279,6 @@ abstract class AbstractFlashcardViewer :
     var cardContent: String? = null
         private set
 
-    private var viewerUrl: String? = null
-    private val fadeDuration = 300
-
     @VisibleForTesting(otherwise = VisibleForTesting.PROTECTED)
     internal lateinit var cardMediaPlayer: CardMediaPlayer
 
@@ -291,9 +287,6 @@ abstract class AbstractFlashcardViewer :
 
     /** Lock to allow thread-safe regeneration of mCard  */
     private val cardLock: ReadWriteLock = ReentrantReadWriteLock()
-
-    /** Preference: Whether the user wants press back twice to return to the main screen"  */
-    private var exitViaDoubleTapBack = false
 
     @VisibleForTesting
     val onRenderProcessGoneDelegate = OnRenderProcessGoneDelegate(this)
@@ -340,6 +333,14 @@ abstract class AbstractFlashcardViewer :
                 }
             },
         )
+
+    private val defaultOnBackCallback =
+        object : OnBackPressedCallback(enabled = true) {
+            override fun handleOnBackPressed() {
+                // TODO: This should be improved now we're using callbacks
+                closeReviewer(RESULT_DEFAULT)
+            }
+        }
 
     protected inner class FlashCardViewerResultCallback(
         private val callback: (result: ActivityResult, reloadRequired: Boolean) -> Unit = { _, _ -> },
@@ -396,7 +397,7 @@ abstract class AbstractFlashcardViewer :
                 val diffX = abs(event.rawX - touchX)
                 val diffY = abs(event.rawY - touchY)
                 // If a click is not coming then we reset the touch
-                if (diffX > Companion.CLICK_ACTION_THRESHOLD || diffY > Companion.CLICK_ACTION_THRESHOLD) {
+                if (diffX > CLICK_ACTION_THRESHOLD || diffY > CLICK_ACTION_THRESHOLD) {
                     hasBeenTouched = false
                 }
             }
@@ -565,6 +566,12 @@ abstract class AbstractFlashcardViewer :
         TtsVoicesFieldFilter.ensureApplied()
     }
 
+    override fun setupBackPressedCallbacks() {
+        onBackPressedDispatcher.addCallback(this, defaultOnBackCallback)
+        onBackPressedDispatcher.addCallback(this, exitViaDoubleTapBackCallback())
+        super.setupBackPressedCallbacks()
+    }
+
     protected open fun getContentViewAttr(fullscreenMode: FullScreenMode): Int = R.layout.reviewer
 
     @get:VisibleForTesting(otherwise = VisibleForTesting.PROTECTED)
@@ -656,25 +663,6 @@ abstract class AbstractFlashcardViewer :
         }
     }
 
-    @Deprecated("Deprecated in Java")
-    override fun onBackPressed() {
-        if (isDrawerOpen) {
-            @Suppress("DEPRECATION")
-            super.onBackPressed()
-        } else {
-            Timber.i("Back key pressed")
-            if (!exitViaDoubleTapBack || backButtonPressedToReturn) {
-                closeReviewer(RESULT_DEFAULT)
-            } else {
-                showSnackbar(R.string.back_pressed_once_reviewer, Snackbar.LENGTH_SHORT)
-            }
-            backButtonPressedToReturn = true
-            executeFunctionWithDelay(Consts.SHORT_TOAST_DURATION) {
-                backButtonPressedToReturn = false
-            }
-        }
-    }
-
     override fun onKeyDown(
         keyCode: Int,
         event: KeyEvent,
@@ -740,19 +728,6 @@ abstract class AbstractFlashcardViewer :
 
     protected open fun answerFieldIsFocused(): Boolean = answerField != null && answerField!!.isFocused
 
-    protected fun clipboardHasText(): Boolean = !getText(clipboard).isNullOrEmpty()
-
-    /**
-     * Returns the text stored in the clipboard or the empty string if the clipboard is empty or contains something that
-     * cannot be converted to text.
-     *
-     * @return the text in clipboard or the empty string.
-     */
-    private fun clipboardGetText(): CharSequence {
-        val text = getText(clipboard)
-        return text ?: ""
-    }
-
     val deckOptionsLauncher =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { _ ->
             Timber.i("Returned from deck options -> Restarting activity")
@@ -811,7 +786,7 @@ abstract class AbstractFlashcardViewer :
             return
         }
         val animation = fromGesture.toAnimationTransition().invert()
-        val editCardIntent = NoteEditorLauncher.EditCard(currentCard!!.id, animation).getIntent(this)
+        val editCardIntent = NoteEditorLauncher.EditCard(currentCard!!.id, animation).toIntent(this)
         editCurrentCardLauncher.launch(editCardIntent)
     }
 
@@ -1234,7 +1209,6 @@ abstract class AbstractFlashcardViewer :
         largeAnswerButtons = preferences.getBoolean("showLargeAnswerButtons", false)
         doubleTapTimeInterval =
             preferences.getInt(DOUBLE_TAP_TIME_INTERVAL, DEFAULT_DOUBLE_TAP_TIME_INTERVAL)
-        exitViaDoubleTapBack = preferences.getBoolean("exitViaDoubleTapBack", false)
         gesturesEnabled = preferences.getBoolean(GestureProcessor.PREF_KEY, false)
         if (gesturesEnabled) {
             gestureProcessor.init(preferences)
@@ -1310,14 +1284,14 @@ abstract class AbstractFlashcardViewer :
     }
 
     override fun automaticShowAnswer() {
-        if (flipCardLayout!!.isEnabled && flipCardLayout!!.visibility == View.VISIBLE) {
+        if (flipCardLayout!!.isEnabled && flipCardLayout!!.isVisible) {
             flipCardLayout!!.performClick()
         }
     }
 
     private suspend fun automaticAnswerShouldWaitForAudio(): Boolean =
         withCol {
-            decks.configDictForDeckId(currentCard!!.did).optBoolean("waitForAudio", true)
+            decks.configDictForDeckId(currentCard!!.did).waitForAudio
         }
 
     internal inner class ReadTextListener : ReadText.ReadTextListener {
@@ -2080,7 +2054,7 @@ abstract class AbstractFlashcardViewer :
         private fun isTouchingEdge(e1: MotionEvent): Boolean {
             val height = touchLayer!!.height
             val width = touchLayer!!.width
-            val margin = Companion.NO_GESTURE_BORDER_DIP * resources.displayMetrics.density + 0.5f
+            val margin = NO_GESTURE_BORDER_DIP * resources.displayMetrics.density + 0.5f
             return e1.x < margin || e1.y < margin || height - e1.y < margin || width - e1.x < margin
         }
 
@@ -2150,7 +2124,7 @@ abstract class AbstractFlashcardViewer :
         private fun initShakeDetector() {
             Timber.d("Initializing shake detector")
             if (gestureProcessor.isBound(Gesture.SHAKE)) {
-                val sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
+                val sensorManager = getSystemService(SENSOR_SERVICE) as SensorManager
                 shakeDetector =
                     ShakeDetector(this).apply {
                         start(sensorManager, SensorManager.SENSOR_DELAY_UI)
@@ -2463,7 +2437,7 @@ abstract class AbstractFlashcardViewer :
                 return true
             }
 
-            when (val signalOrdinal = url.toSignal()) {
+            when (url.toSignal()) {
                 Signal.SIGNAL_UNHANDLED -> {}
                 Signal.SIGNAL_NOOP -> return true
                 Signal.TYPE_FOCUS -> return true
@@ -2530,7 +2504,7 @@ abstract class AbstractFlashcardViewer :
                             intent =
                                 Intent(
                                     Intent.ACTION_VIEW,
-                                    Uri.parse("market://details?id=$packageName"),
+                                    "market://details?id=$packageName".toUri(),
                                 )
                             if (packageManager.resolveActivityCompat(
                                     intent,
@@ -2550,7 +2524,7 @@ abstract class AbstractFlashcardViewer :
             }
             if (intent == null) {
                 Timber.d("Opening external link \"%s\" with an Intent", url)
-                intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                intent = Intent(Intent.ACTION_VIEW, url.toUri())
             } else {
                 Timber.d("Opening resolved external link \"%s\" with an Intent: %s", url, intent)
             }
@@ -2601,7 +2575,7 @@ abstract class AbstractFlashcardViewer :
             }
         }
 
-        @TargetApi(Build.VERSION_CODES.O)
+        @RequiresApi(Build.VERSION_CODES.O)
         override fun onRenderProcessGone(
             view: WebView,
             detail: RenderProcessGoneDetail,
@@ -2636,7 +2610,7 @@ abstract class AbstractFlashcardViewer :
 
     internal fun displayCouldNotFindMediaSnackbar(filename: String?) {
         showSnackbar(getString(R.string.card_viewer_could_not_find_image, filename)) {
-            setAction(R.string.help) { openUrl(Uri.parse(getString(R.string.link_faq_missing_media))) }
+            setAction(R.string.help) { openUrl(getString(R.string.link_faq_missing_media).toUri()) }
         }
     }
 

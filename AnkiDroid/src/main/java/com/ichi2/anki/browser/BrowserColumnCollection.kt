@@ -69,6 +69,33 @@ class BrowserColumnCollection(
             return BrowserColumnCollection(columns)
         }
 
+        class ColumnReplacement(
+            val newColumns: BrowserColumnCollection,
+            val originalColumns: List<CardBrowserColumn>,
+        )
+
+        fun replace(
+            prefs: SharedPreferences,
+            mode: CardsOrNotes,
+            newColumns: List<CardBrowserColumn>,
+        ): ColumnReplacement {
+            val oldColumns = mutableListOf<CardBrowserColumn>()
+
+            val newColumnCollection =
+                update(prefs, mode) { cols ->
+                    oldColumns.addAll(cols.filterNotNull())
+                    cols.clear()
+                    cols.addAll(newColumns)
+                    return@update true
+                    // guaranteed to be non-null, since we return true
+                }!!
+
+            return ColumnReplacement(
+                newColumns = newColumnCollection,
+                originalColumns = oldColumns,
+            )
+        }
+
         /**
          * @param block Update the column list here. `null` meaning 'none'.
          * Return `false` if no changes should be made

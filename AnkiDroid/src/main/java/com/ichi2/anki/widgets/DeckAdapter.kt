@@ -26,6 +26,7 @@ import android.widget.LinearLayout
 import android.widget.RelativeLayout
 import android.widget.TextView
 import androidx.core.content.res.getDrawableOrThrow
+import androidx.core.content.withStyledAttributes
 import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.ListAdapter
 import androidx.recyclerview.widget.RecyclerView
@@ -36,6 +37,7 @@ import com.ichi2.libanki.DeckId
 import com.ichi2.libanki.sched.DeckNode
 import kotlinx.coroutines.runBlocking
 import net.ankiweb.rsdroid.RustCleanup
+import timber.log.Timber
 
 /**
  * A [RecyclerView.Adapter] used to show the list of decks inside [com.ichi2.anki.DeckPicker].
@@ -68,7 +70,9 @@ class DeckAdapter(
     private val deckNameDynColor: Int
     private val expandImage: Drawable
     private val collapseImage: Drawable
-    private val selectableItemBackground: Int
+
+    // intended to be `val` but was declared a `var` to allow initialization from the init {} block
+    private var selectableItemBackground: Int = 0
     private val endPadding: Int = context.resources.getDimension(R.dimen.deck_picker_right_padding).toInt()
     private val startPadding: Int = context.resources.getDimension(R.dimen.deck_picker_left_padding).toInt()
     private val startPaddingSmall: Int = context.resources.getDimension(R.dimen.deck_picker_left_padding_small).toInt()
@@ -153,7 +157,10 @@ class DeckAdapter(
             deckLayout.setPaddingRelative(startPadding, 0, endPadding, 0)
         }
         if (node.children.isNotEmpty()) {
-            holder.deckExpander.setOnClickListener { onDeckChildrenToggled(node.did) }
+            holder.deckExpander.setOnClickListener {
+                onDeckChildrenToggled(node.did)
+                notifyItemChanged(position) // Ensure UI updates
+            }
         } else {
             holder.deckExpander.isClickable = false
             holder.deckExpander.setOnClickListener(null)
@@ -201,9 +208,11 @@ class DeckAdapter(
             if (node.collapsed) {
                 expander.setImageDrawable(expandImage)
                 expander.contentDescription = expander.context.getString(R.string.expand)
+                Timber.d("Deck Collapsed")
             } else {
                 expander.setImageDrawable(collapseImage)
                 expander.contentDescription = expander.context.getString(R.string.collapse)
+                Timber.d("Deck Expanded")
             }
         } else {
             expander.visibility = View.INVISIBLE
@@ -232,7 +241,7 @@ class DeckAdapter(
                 R.attr.expandRef,
                 R.attr.collapseRef,
             )
-        var ta = context.obtainStyledAttributes(attrs)
+        val ta = context.obtainStyledAttributes(attrs)
         zeroCountColor = ta.getColor(0, context.getColor(R.color.black))
         newCountColor = ta.getColor(1, context.getColor(R.color.black))
         learnCountColor = ta.getColor(2, context.getColor(R.color.black))
@@ -245,9 +254,9 @@ class DeckAdapter(
         collapseImage = ta.getDrawableOrThrow(8)
         collapseImage.isAutoMirrored = true
         ta.recycle()
-        ta = context.obtainStyledAttributes(intArrayOf(android.R.attr.selectableItemBackground))
-        selectableItemBackground = ta.getResourceId(0, 0)
-        ta.recycle()
+        context.withStyledAttributes(attrs = intArrayOf(android.R.attr.selectableItemBackground)) {
+            selectableItemBackground = ta.getResourceId(0, 0)
+        }
     }
 }
 

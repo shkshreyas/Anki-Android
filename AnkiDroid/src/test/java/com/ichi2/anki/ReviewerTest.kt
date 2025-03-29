@@ -21,6 +21,7 @@ import android.view.Menu
 import androidx.annotation.CheckResult
 import androidx.core.content.edit
 import androidx.core.os.BundleCompat
+import androidx.core.view.iterator
 import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -38,6 +39,7 @@ import com.ichi2.anki.preferences.sharedPrefs
 import com.ichi2.anki.reviewer.ActionButtonStatus
 import com.ichi2.libanki.Card
 import com.ichi2.libanki.CardType
+import com.ichi2.libanki.Consts
 import com.ichi2.libanki.NotetypeJson
 import com.ichi2.libanki.Notetypes
 import com.ichi2.libanki.QueueType
@@ -200,9 +202,9 @@ class ReviewerTest : RobolectricTest() {
     fun testMultipleCards() =
         runTest {
             addNoteWithThreeCards()
-            val nw = col.decks.configDictForDeckId(1).getJSONObject("new")
+            val new = defaultDeckConfig.new
             val time = collectionTime
-            nw.put("delays", JSONArray(intArrayOf(1, 10, 60, 120)))
+            new.delays = JSONArray(intArrayOf(1, 10, 60, 120))
 
             waitForAsyncTasksToComplete()
 
@@ -230,13 +232,13 @@ class ReviewerTest : RobolectricTest() {
     @Flaky(OS.ALL, "java.lang.AssertionError: Expected: \"2\" but: was \"1\"")
     fun testLrnQueueAfterUndo() =
         runTest {
-            val nw = col.decks.configDictForDeckId(1).getJSONObject("new")
+            val new = defaultDeckConfig.new
             val time = TimeManager.time as MockTime
-            nw.put("delays", JSONArray(intArrayOf(1, 10, 60, 120)))
+            new.delays = JSONArray(intArrayOf(1, 10, 60, 120))
 
             val cards =
                 arrayOf(
-                    addRevBasicNoteDueToday("1", "bar").firstCard(),
+                    addBasicNote("1", "bar").firstCard(),
                     addBasicNote("2", "bar").firstCard(),
                     addBasicNote("3", "bar").firstCard(),
                 )
@@ -516,6 +518,9 @@ class ReviewerTest : RobolectricTest() {
         }
     }
 
+    private val defaultDeckConfig
+        get() = col.decks.configDictForDeckId(Consts.DEFAULT_DECK_ID)
+
     private class ReviewerForMenuItems : Reviewer() {
         var menu: Menu? = null
             private set
@@ -530,9 +535,7 @@ class ReviewerTest : RobolectricTest() {
         fun getVisibleButtonNamesExcept(vararg doNotReturn: Int): List<String> {
             val visibleButtons = arrayListOf<String>()
             val toSkip = hashSetOf(*doNotReturn.toTypedArray())
-            val menu = menu
-            for (i in 0 until menu!!.size()) {
-                val item = menu.getItem(i)
+            for (item in menu!!) {
                 if (toSkip.contains(item.itemId)) {
                     continue
                 }

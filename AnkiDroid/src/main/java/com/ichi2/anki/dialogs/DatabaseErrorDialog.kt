@@ -18,16 +18,15 @@ package com.ichi2.anki.dialogs
 
 import android.annotation.SuppressLint
 import android.app.Dialog
-import android.content.DialogInterface
-import android.net.Uri
 import android.os.Bundle
 import android.os.Message
 import android.os.Parcelable
-import android.view.KeyEvent
+import androidx.activity.addCallback
 import androidx.annotation.CheckResult
 import androidx.annotation.StringRes
 import androidx.appcompat.app.AlertDialog
 import androidx.core.app.ActivityCompat
+import androidx.core.net.toUri
 import androidx.core.os.BundleCompat
 import androidx.core.os.bundleOf
 import androidx.lifecycle.lifecycleScope
@@ -269,15 +268,7 @@ class DatabaseErrorDialog : AsyncDialogFragment() {
                             }
                         }
                 }
-                alertDialog
-                    .setOnKeyListener { _: DialogInterface?, keyCode: Int, _: KeyEvent? ->
-                        if (keyCode == KeyEvent.KEYCODE_BACK) {
-                            Timber.i("DIALOG_RESTORE_BACKUP caught hardware back button")
-                            requireActivity().dismissAllDialogFragments()
-                            return@setOnKeyListener true
-                        }
-                        false
-                    }.create()
+                alertDialog.create()
             }
             DIALOG_NEW_COLLECTION -> {
                 // Allow user to create a new empty collection
@@ -403,6 +394,22 @@ class DatabaseErrorDialog : AsyncDialogFragment() {
         }
     }
 
+    override fun setupDialog(
+        dialog: Dialog,
+        style: Int,
+    ) {
+        super.setupDialog(dialog, style)
+
+        if (requireDialogType() == DIALOG_RESTORE_BACKUP) {
+            // we don't want to go back to DIALOG_CONFIRM_RESTORE_BACKUP if back is pressed
+            // instead, close all dialogs and return to the DeckPicker
+            (dialog as AlertDialog).onBackPressedDispatcher.addCallback(this, true) {
+                Timber.i("DIALOG_RESTORE_BACKUP caught hardware back button")
+                requireActivity().dismissAllDialogFragments()
+            }
+        }
+    }
+
     /** @see DeckPicker.showDatabaseErrorDialog */
     private fun showDatabaseErrorDialog(errorDialogType: DatabaseErrorDialogType) {
         requireDeckPicker().showDatabaseErrorDialog(errorDialogType, exceptionData)
@@ -443,7 +450,7 @@ class DatabaseErrorDialog : AsyncDialogFragment() {
             R.string.install_non_play_store_ankidroid_recommended,
             dismissesDialog = false,
             {
-                val restoreUi = Uri.parse(it.getString(R.string.link_install_non_play_store_install))
+                val restoreUi = it.getString(R.string.link_install_non_play_store_install).toUri()
                 it.openUrl(restoreUi)
             },
         ),
@@ -451,7 +458,7 @@ class DatabaseErrorDialog : AsyncDialogFragment() {
             R.string.install_non_play_store_ankidroid,
             dismissesDialog = false,
             {
-                val restoreUi = Uri.parse(it.getString(R.string.link_install_non_play_store_install))
+                val restoreUi = it.getString(R.string.link_install_non_play_store_install).toUri()
                 it.openUrl(restoreUi)
             },
         ),
@@ -482,7 +489,7 @@ class DatabaseErrorDialog : AsyncDialogFragment() {
             R.string.help_title_get_help,
             dismissesDialog = false,
             {
-                it.openUrl(Uri.parse(it.getString(R.string.link_forum)))
+                it.openUrl(it.getString(R.string.link_forum).toUri())
             },
         ),
         RECREATE_COLLECTION(

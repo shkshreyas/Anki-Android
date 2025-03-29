@@ -23,7 +23,6 @@ import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
 import android.content.res.Resources
-import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
@@ -31,6 +30,7 @@ import android.system.Os
 import android.webkit.CookieManager
 import androidx.annotation.VisibleForTesting
 import androidx.core.content.edit
+import androidx.core.net.toUri
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.MutableLiveData
 import androidx.work.Configuration
@@ -335,7 +335,10 @@ open class AnkiDroidApp :
          *
          * This replicates the manner which `lifecycleScope`/`viewModelScope` is exposed in Android
          */
-        val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+        // lazy init required due to kotlinx-coroutines-test 1.10.0:
+        // Main was accessed when the platform dispatcher was absent and the test dispatcher
+        // was unset
+        val applicationScope by lazy { CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate) }
 
         /**
          * A [SharedPreferencesProvider] which does not require [onCreate] when run from tests
@@ -431,7 +434,7 @@ open class AnkiDroidApp :
         fun getMarketIntent(context: Context): Intent {
             val uri =
                 context.getString(if (CompatHelper.isKindle) R.string.link_market_kindle else R.string.link_market)
-            val parsed = Uri.parse(uri)
+            val parsed = uri.toUri()
             return Intent(Intent.ACTION_VIEW, parsed)
         } // TODO actually this can be done by translating "link_help" string for each language when the App is
 

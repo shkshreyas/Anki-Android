@@ -18,10 +18,12 @@ package com.ichi2.anki.pages
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
+import android.view.View
 import android.webkit.JavascriptInterface
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import androidx.activity.OnBackPressedCallback
+import androidx.core.view.isVisible
 import androidx.fragment.app.FragmentActivity
 import anki.collection.OpChanges
 import anki.collection.Progress
@@ -30,7 +32,7 @@ import com.ichi2.anki.CollectionManager.withCol
 import com.ichi2.anki.CrashReportService
 import com.ichi2.anki.ProgressContext
 import com.ichi2.anki.R
-import com.ichi2.anki.dialogs.DiscardChangesDialog
+import com.ichi2.anki.SingleFragmentActivity
 import com.ichi2.anki.launchCatchingTask
 import com.ichi2.anki.utils.openUrl
 import com.ichi2.anki.withProgress
@@ -44,7 +46,10 @@ import kotlinx.coroutines.withContext
 import timber.log.Timber
 
 @NeedsTest("15130: pressing back: icon + button should return to options if the manual is open")
+@NeedsTest("17905: pressing back before the webpage is ready closes the screen")
 class DeckOptions : PageFragment() {
+    private var webViewIsReady = false
+
     /**
      * Callback enabled when the manual is opened in the deck options.
      * It requests the webview to go back to the Deck Options.
@@ -66,44 +71,29 @@ class DeckOptions : PageFragment() {
         object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
                 Timber.v("DeckOptions: requesting the webview to handle the user close request.")
-                webView.evaluateJavascript("anki.deckOptionsPendingChanges()") {
-                    // No callback. Checking whether there are change is asynchronous. Javascript will use the BridgeCommand to request
-                    // Kotlin to either close (if there is no change) or request the user to confirm they want to discard the changes.
+                if (webViewIsReady) {
+                    webView.evaluateJavascript("anki.deckOptionsPendingChanges()") {
+                        // Callback is handled in the WebView:
+                        //  * A 'discard changes' dialog may be shown, using confirm()
+                        //  * if no changes, or changes discarded, `deckOptionsRequireClose` is called
+                        //    which PostRequestHandler handles and calls on this fragment
+                    }
+                } else {
+                    // The webview is not yet loaded, no change could have occurred, we can safely close it.
+                    actuallyClose()
                 }
             }
         }
 
-    override val bridgeCommands =
-        mapOf<String, () -> Unit>(
-            "confirmDiscardChanges" to {
-                launchCatchingTask {
-                    requestConfirmDiscard()
-                }
-            },
-            "_close" to {
-                actuallyClose()
-            },
-        )
-
     /**
      * Close the view, discarding change if needed.
      */
-    private fun actuallyClose() {
+    fun actuallyClose() {
         onBackFromDeckOptions.isEnabled = false
         Timber.v("webView: navigating back")
         launchCatchingTask {
             // Required to be in a task to ensure the callback is disabled.
             requireActivity().onBackPressedDispatcher.onBackPressed()
-        }
-    }
-
-    /**
-     * Request the user to confirm they want to close the options, discarding change. If they accept, do it.
-     */
-    private fun requestConfirmDiscard() {
-        Timber.v("DeckOptions: showing 'discard changes'")
-        DiscardChangesDialog.showDialog(requireActivity()) {
-            actuallyClose()
         }
     }
 
@@ -156,6 +146,15 @@ class DeckOptions : PageFragment() {
         }
     }
 
+    /** @see onWebViewReady */
+    override fun onViewCreated(
+        view: View,
+        savedInstanceState: Bundle?,
+    ) {
+        pageLoadingIndicator.isVisible = true
+        super.onViewCreated(view, savedInstanceState)
+    }
+
     override fun onWebViewCreated(webView: WebView) {
         // addJavascriptInterface needs to happen before loadUrl
         webView.addJavascriptInterface(ModalJavaScriptInterfaceListener(), "ankidroid")
@@ -171,6 +170,11 @@ class DeckOptions : PageFragment() {
 
         return object : PageWebViewClient() {
             private val ankiManualHostRegex = Regex("^docs\\.ankiweb\\.net\$")
+
+            /** @see onWebViewReady */
+            override fun onShowWebView(webView: WebView) {
+                // no-op: handled in onVebViewReady
+            }
 
             override fun shouldOverrideUrlLoading(
                 view: WebView?,
@@ -221,6 +225,13 @@ class DeckOptions : PageFragment() {
 
         webView.evaluateJavascript(openJs, {})
         webView.evaluateJavascript(closeJs, {})
+    }
+
+    fun onWebViewReady() {
+        Timber.d("WebView ready to receive input")
+        webViewIsReady = true
+        webView.isVisible = true
+        pageLoadingIndicator.isVisible = false
     }
 
     companion object {
@@ -306,4 +317,27 @@ private fun ProgressContext.toUpdatingCardsString(): String? {
         currentCardsCount = params.current,
         totalCardsCount = params.total,
     )
+}
+
+private fun FragmentActivity.requireDeckOptionsFragment(): DeckOptions {
+    require(this is SingleFragmentActivity) { "activity must be SingleFragmentActivity" }
+    return requireNotNull(this.fragment as? DeckOptions?) { "fragment must be DeckOptions" }
+}
+
+/**
+ * Called when Deck Options WebView is ready to receive requests.
+ */
+fun FragmentActivity.deckOptionsReady(input: ByteArray): ByteArray {
+    requireDeckOptionsFragment().onWebViewReady()
+    return input
+}
+
+/**
+ * Force closing the deck options
+ *
+ * This is called after a 'discard changes?' dialog is accepted
+ */
+fun FragmentActivity.deckOptionsRequireClose(input: ByteArray): ByteArray {
+    requireDeckOptionsFragment().actuallyClose()
+    return input
 }

@@ -1,6 +1,7 @@
 // noinspection MissingCopyrightHeader #8659
 package com.ichi2.anki
 
+import android.annotation.SuppressLint
 import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
@@ -21,19 +22,18 @@ import com.ichi2.anki.dialogs.utils.title
 import com.ichi2.anki.exception.UnknownDatabaseVersionException
 import com.ichi2.anki.preferences.sharedPrefs
 import com.ichi2.anki.utils.ext.dismissAllDialogFragments
-import com.ichi2.annotations.NeedsTest
 import com.ichi2.libanki.DeckId
 import com.ichi2.libanki.Storage
 import com.ichi2.libanki.utils.TimeManager
 import com.ichi2.testutils.BackendEmulatingOpenConflict
 import com.ichi2.testutils.BackupManagerTestUtilities
 import com.ichi2.testutils.DbUtils
+import com.ichi2.testutils.common.Flaky
+import com.ichi2.testutils.common.OS
 import com.ichi2.testutils.grantWritePermissions
-import com.ichi2.testutils.libanki.buryNewSiblings
 import com.ichi2.testutils.revokeWritePermissions
 import com.ichi2.utils.KotlinCleanup
 import com.ichi2.utils.ResourceLoader
-import org.apache.commons.exec.OS
 import org.hamcrest.MatcherAssert.assertThat
 import org.hamcrest.Matchers.containsInAnyOrder
 import org.hamcrest.Matchers.equalTo
@@ -83,6 +83,7 @@ class DeckPickerTest : RobolectricTest() {
     }
 
     @Test
+    @SuppressLint("UseKtx")
     fun getPreviousVersionUpgradeFrom201to292() {
         val newVersion = 20900302 // 2.9.2
         val preferences = mock(SharedPreferences::class.java)
@@ -108,6 +109,7 @@ class DeckPickerTest : RobolectricTest() {
     }
 
     @Test
+    @SuppressLint("UseKtx")
     fun getPreviousVersionUpgradeFrom202to292() {
         val newVersion: Long = 20900302 // 2.9.2
         val preferences = mock(SharedPreferences::class.java)
@@ -132,6 +134,7 @@ class DeckPickerTest : RobolectricTest() {
     }
 
     @Test
+    @SuppressLint("UseKtx")
     fun getPreviousVersionUpgradeFrom281to291() {
         val prevVersion = 20800301 // 2.8.1
         val newVersion: Long = 20900301 // 2.9.1
@@ -177,7 +180,7 @@ class DeckPickerTest : RobolectricTest() {
         val sched = col.sched
         val dconf = col.decks.getConfig(1)
         assertNotNull(dconf)
-        dconf.getJSONObject("new").put("perDay", 10)
+        dconf.new.perDay = 10
         col.decks.save(dconf)
         for (i in 0..10) {
             addBasicNote("Which card is this ?", i.toString())
@@ -288,9 +291,7 @@ class DeckPickerTest : RobolectricTest() {
             // We don't show it if the user is new.
             targetContext
                 .sharedPrefs()
-                .edit()
-                .putString("lastVersion", "0.1")
-                .apply()
+                .edit { putString("lastVersion", "0.1") }
             val d =
                 super.startActivityNormallyOpenCollectionWithIntent(
                     DeckPickerEx::class.java,
@@ -493,6 +494,7 @@ class DeckPickerTest : RobolectricTest() {
         }
 
     @Test
+    @Flaky(OS.WINDOWS)
     fun `ContextMenu unburied cards when selecting UNBURY`() =
         runTest {
             startActivityNormallyOpenCollectionWithIntent(DeckPicker::class.java, Intent()).run {
@@ -544,11 +546,8 @@ class DeckPickerTest : RobolectricTest() {
 
     @Test
     @RunInBackground
-    @NeedsTest("fix this on Windows")
+    @Flaky(OS.WINDOWS)
     fun version16CollectionOpens() {
-        if (OS.isFamilyWindows()) {
-            assumeTrue("test is flaky on Windows", false)
-        }
         try {
             setupColV16()
             InitialActivityWithConflictTest.setupForValid(targetContext)
@@ -697,7 +696,7 @@ class DeckPickerTest : RobolectricTest() {
         // one empty deck to be initially selected, one with cards to check 'unbury' status
         val emptyDeck = addDeck("No Cards")
         val deckWithCards = addDeck("With Cards")
-        updateDeckConfig(deckWithCards) { buryNewSiblings = true }
+        updateDeckConfig(deckWithCards) { new.bury = true }
 
         // Add a note with 2 cards in deck "With Cards", one of these cards is to be buried
         col.notetypes.byName("Basic (and reversed card)")!!.also { noteType ->
